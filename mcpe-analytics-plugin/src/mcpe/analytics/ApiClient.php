@@ -45,6 +45,16 @@ class ApiClient {
         ]);
     }
 
+    public function sendLogsAsync(array $logs): void {
+        if (empty($logs)) return;
+        $chunks = array_chunk($logs, 100);
+        foreach ($chunks as $chunk) {
+            $this->sendAsync("/api/ingest/logs", [
+                "logs" => $chunk,
+            ]);
+        }
+    }
+
     public function sendBatch(array $events): void {
         if (empty($events)) return;
 

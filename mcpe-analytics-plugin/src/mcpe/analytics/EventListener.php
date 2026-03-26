@@ -23,6 +23,10 @@ class EventListener implements Listener {
         $this->plugin = $plugin;
     }
 
+    public function getPlatform(Player $player): string {
+        return $this->getPlatformName($player);
+    }
+
     private function getPlatformName(Player $player): string {
         $data = $player->getNetworkSession()->getPlayerInfo();
         if ($data === null) return "Unknown";

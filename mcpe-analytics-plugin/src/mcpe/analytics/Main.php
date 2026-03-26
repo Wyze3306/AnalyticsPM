@@ -13,6 +13,7 @@ use pocketmine\utils\TextFormat;
 class Main extends PluginBase {
 
     private EventListener $listener;
+    private LogsTracker $logsTracker;
     private ApiClient $apiClient;
     private EventBuffer $buffer;
     private SessionTracker $sessionTracker;
@@ -35,12 +36,15 @@ class Main extends PluginBase {
         $this->sessionTracker = new SessionTracker();
 
         $this->listener = new EventListener($this);
+        $this->logsTracker = new LogsTracker($this);
         $this->getServer()->getPluginManager()->registerEvents($this->listener, $this);
+        $this->getServer()->getPluginManager()->registerEvents($this->logsTracker, $this);
 
         // Flush buffer periodically
         $this->getScheduler()->scheduleRepeatingTask(
             new ClosureTask(function(): void {
                 $this->flushBuffer();
+                $this->logsTracker->flush();
             }),
             $flushInterval * 20 // Convert seconds to ticks
         );
@@ -52,6 +56,9 @@ class Main extends PluginBase {
         // Flush remaining events and close all sessions
         if (isset($this->buffer)) {
             $this->flushBuffer();
+        }
+        if (isset($this->logsTracker)) {
+            $this->logsTracker->flush();
         }
 
         if (isset($this->sessionTracker)) {
@@ -75,6 +82,7 @@ class Main extends PluginBase {
                 $sender->sendMessage(TextFormat::AQUA . "=== MCPE Analytics ===");
                 $sender->sendMessage(TextFormat::WHITE . "Panel: " . $this->getConfig()->get("panel-url"));
                 $sender->sendMessage(TextFormat::WHITE . "Buffer: " . $this->buffer->count() . " events");
+                $sender->sendMessage(TextFormat::WHITE . "Logs buffer: " . $this->logsTracker->getBufferCount() . " logs");
                 $sender->sendMessage(TextFormat::WHITE . "Sessions: " . $this->sessionTracker->activeCount());
                 $sender->sendMessage(TextFormat::WHITE . "Track chat: " . ($this->getConfig()->get("track-chat") ? "ON" : "OFF"));
                 $sender->sendMessage(TextFormat::WHITE . "Track blocks: " . ($this->getConfig()->get("track-blocks") ? "ON" : "OFF"));
@@ -101,6 +109,10 @@ class Main extends PluginBase {
         }
 
         return true;
+    }
+
+    public function getListener(): EventListener {
+        return $this->listener;
     }
 
     public function getApiClient(): ApiClient {

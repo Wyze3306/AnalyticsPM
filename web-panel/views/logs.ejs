@@ -1,0 +1,384 @@
+<%- include('partials/header', { title: 'Logs' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Logs</h1>
+    <p class="subtitle">Recherche, filtres et tracage d'items / joueurs</p>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-sm" id="btnExport" onclick="exportResults()">Exporter CSV</button>
+  </div>
+</div>
+
+<!-- Stats rapides -->
+<div class="stats-grid">
+  <div class="stat-card highlight">
+    <div class="stat-icon purple">&#9776;</div>
+    <div class="stat-label">Logs totaux</div>
+    <div class="stat-value gradient" id="lTotal">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon blue">&#9203;</div>
+    <div class="stat-label">Dernieres 24h</div>
+    <div class="stat-value" id="lLast24h">-</div>
+  </div>
+  <div class="stat-card highlight-pink">
+    <div class="stat-icon orange">&#9888;</div>
+    <div class="stat-label">Warnings</div>
+    <div class="stat-value" id="lWarnings">-</div>
+    <div class="stat-sub" id="lWarnings24h">-</div>
+  </div>
+</div>
+
+<!-- Tabs: Search / Item Trace / Player Trace -->
+<div class="card">
+  <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">
+    <button class="btn btn-primary tab-btn active" data-tab="search" onclick="switchTab('search')">Recherche</button>
+    <button class="btn tab-btn" data-tab="trace-item" onclick="switchTab('trace-item')">Tracer un item</button>
+    <button class="btn tab-btn" data-tab="trace-player" onclick="switchTab('trace-player')">Timeline joueur</button>
+  </div>
+
+  <!-- Search tab -->
+  <div class="tab-content active" id="tab-search">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+      <input type="text" id="fSearch" class="text-input" placeholder="Recherche globale..." style="min-width:250px">
+      <input type="text" id="fPlayer" class="text-input" placeholder="Joueur" style="min-width:140px">
+      <select id="fCategory" class="select-input"><option value="">Toutes categories</option></select>
+      <select id="fAction" class="select-input"><option value="">Toutes actions</option></select>
+      <input type="text" id="fItem" class="text-input" placeholder="Item" style="min-width:130px">
+      <input type="text" id="fTarget" class="text-input" placeholder="Joueur cible" style="min-width:130px">
+      <select id="fLevel" class="select-input">
+        <option value="">Tous niveaux</option>
+        <option value="info">Info</option>
+        <option value="warning">Warning</option>
+      </select>
+      <button class="btn btn-primary" onclick="searchLogs()">Rechercher</button>
+      <button class="btn btn-ghost" onclick="clearFilters()">Reset</button>
+    </div>
+    <div class="table-container">
+      <table class="data-table compact">
+        <thead>
+          <tr>
+            <th style="width:140px">Date</th>
+            <th>Joueur</th>
+            <th>Categorie</th>
+            <th>Action</th>
+            <th>Detail</th>
+            <th>Item</th>
+            <th>Cible</th>
+            <th>Monde</th>
+            <th>Pos</th>
+            <th style="width:30px">Niv.</th>
+          </tr>
+        </thead>
+        <tbody id="logsBody"><tr><td colspan="10" class="empty">Utilisez les filtres pour rechercher</td></tr></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="logsPagination"></div>
+  </div>
+
+  <!-- Item trace tab -->
+  <div class="tab-content" id="tab-trace-item" style="display:none">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+      <input type="text" id="traceItem" class="text-input" placeholder="Nom de l'item (ex: Onyx, Cle, Soul...)" style="min-width:280px">
+      <button class="btn btn-primary" onclick="traceItem()">Tracer</button>
+    </div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Suit le parcours d'un item a travers tous les joueurs et actions : drop, pickup, craft, chest, trade...</p>
+    <div class="timeline" id="itemTimeline"><p style="color:var(--text-muted);padding:20px">Entrez un nom d'item et cliquez "Tracer"</p></div>
+  </div>
+
+  <!-- Player trace tab -->
+  <div class="tab-content" id="tab-trace-player" style="display:none">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+      <input type="text" id="tracePlayer" class="text-input" placeholder="Nom du joueur" style="min-width:250px">
+      <select id="tracePlayerCat" class="select-input"><option value="">Toutes categories</option></select>
+      <button class="btn btn-primary" onclick="tracePlayer()">Voir timeline</button>
+    </div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Historique complet et chronologique de toutes les actions d'un joueur.</p>
+    <div id="playerTraceResults"></div>
+  </div>
+</div>
+
+<!-- Quick charts -->
+<div class="charts-grid">
+  <div class="chart-card">
+    <h3><span class="chart-dot purple"></span> Top joueurs (volume de logs)</h3>
+    <canvas id="topPlayersChart"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3><span class="chart-dot pink"></span> Top items surveilles</h3>
+    <canvas id="topItemsChart"></canvas>
+  </div>
+</div>
+
+<script>
+const C = {
+  palette: ['#8b5cf6','#ec4899','#d946ef','#60a5fa','#34d399','#fbbf24','#f87171','#a78bfa','#f472b6','#14b8a6'],
+  violet: '#8b5cf6', pink: '#ec4899', green: '#34d399', gridColor: 'rgba(139,92,246,0.06)', tickColor: '#7b6fa0',
+};
+
+function formatDate(ts) {
+  if (!ts) return '-';
+  return new Date(ts).toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+}
+
+function levelBadge(lvl) {
+  if (lvl === 'warning') return '<span class="badge badge-away">WARN</span>';
+  return '<span class="badge badge-recent">INFO</span>';
+}
+
+function escapeHtml(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// Tab switching
+function switchTab(name) {
+  document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
+  document.querySelectorAll('.tab-btn').forEach(b => { b.classList.remove('btn-primary'); b.classList.remove('active'); });
+  document.getElementById('tab-' + name).style.display = 'block';
+  document.querySelector('[data-tab="' + name + '"]').classList.add('btn-primary', 'active');
+}
+
+// Load categories
+async function loadCategories() {
+  const cats = await (await fetch('/api/logs/categories')).json();
+  const sel = document.getElementById('fCategory');
+  const sel2 = document.getElementById('tracePlayerCat');
+  cats.forEach(c => {
+    sel.innerHTML += '<option value="' + c.category + '">' + c.category + ' (' + c.count + ')</option>';
+    sel2.innerHTML += '<option value="' + c.category + '">' + c.category + '</option>';
+  });
+}
+
+// Load actions when category changes
+document.getElementById('fCategory').addEventListener('change', async (e) => {
+  const cat = e.target.value;
+  const acts = await (await fetch('/api/logs/actions' + (cat ? '?category=' + encodeURIComponent(cat) : ''))).json();
+  const sel = document.getElementById('fAction');
+  sel.innerHTML = '<option value="">Toutes actions</option>';
+  acts.forEach(a => { sel.innerHTML += '<option value="' + a.action + '">' + a.action + ' (' + a.count + ')</option>'; });
+});
+
+// Search
+let currentLogPage = 0;
+const LOG_PAGE = 50;
+let lastSearchResults = [];
+
+async function searchLogs(page = 0) {
+  currentLogPage = page;
+  const params = new URLSearchParams();
+  const s = document.getElementById('fSearch').value; if (s) params.set('search', s);
+  const p = document.getElementById('fPlayer').value; if (p) params.set('player', p);
+  const c = document.getElementById('fCategory').value; if (c) params.set('category', c);
+  const a = document.getElementById('fAction').value; if (a) params.set('action', a);
+  const i = document.getElementById('fItem').value; if (i) params.set('item', i);
+  const t = document.getElementById('fTarget').value; if (t) params.set('target', t);
+  const l = document.getElementById('fLevel').value; if (l) params.set('level', l);
+  params.set('limit', LOG_PAGE);
+  params.set('offset', page * LOG_PAGE);
+
+  const data = await (await fetch('/api/logs?' + params)).json();
+  lastSearchResults = data.logs;
+
+  const tbody = document.getElementById('logsBody');
+  if (data.logs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="10" class="empty">Aucun log trouve</td></tr>';
+    document.getElementById('logsPagination').innerHTML = '';
+    return;
+  }
+
+  tbody.innerHTML = data.logs.map(l => {
+    const pos = (l.x != null && l.y != null && l.z != null) ? Math.round(l.x) + ',' + Math.round(l.y) + ',' + Math.round(l.z) : '-';
+    return '<tr class="' + (l.level === 'warning' ? 'log-warning' : '') + '">' +
+      '<td style="font-size:11px;white-space:nowrap">' + formatDate(l.timestamp) + '</td>' +
+      '<td>' + (l.player_name ? '<a href="#" onclick="quickFilterPlayer(\'' + escapeHtml(l.player_name) + '\');return false" style="font-weight:700">' + escapeHtml(l.player_name) + '</a>' : '-') + '</td>' +
+      '<td><span style="color:var(--violet-light);font-weight:600;font-size:11px">' + escapeHtml(l.category) + '</span></td>' +
+      '<td>' + escapeHtml(l.action) + '</td>' +
+      '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(l.detail) + '">' + escapeHtml(l.detail || '') + '</td>' +
+      '<td>' + (l.item_name ? '<a href="#" onclick="quickTraceItem(\'' + escapeHtml(l.item_name) + '\');return false" style="color:var(--pink-light);font-weight:600">' + escapeHtml(l.item_name) + (l.item_count ? ' x' + l.item_count : '') + '</a>' : '-') + '</td>' +
+      '<td>' + (l.target_player ? '<a href="#" onclick="quickFilterPlayer(\'' + escapeHtml(l.target_player) + '\');return false">' + escapeHtml(l.target_player) + '</a>' : '-') + '</td>' +
+      '<td>' + escapeHtml(l.world || '-') + '</td>' +
+      '<td style="font-size:11px">' + pos + '</td>' +
+      '<td>' + levelBadge(l.level) + '</td>' +
+    '</tr>';
+  }).join('');
+
+  const totalPages = Math.ceil(data.total / LOG_PAGE);
+  document.getElementById('logsPagination').innerHTML =
+    (page > 0 ? '<button class="btn btn-sm" onclick="searchLogs(' + (page-1) + ')">&#8592;</button>' : '') +
+    '<span class="page-info">' + data.total + ' resultats | Page ' + (page+1) + '/' + Math.max(totalPages,1) + '</span>' +
+    (page < totalPages-1 ? '<button class="btn btn-sm" onclick="searchLogs(' + (page+1) + ')">&#8594;</button>' : '');
+}
+
+function quickFilterPlayer(name) {
+  document.getElementById('fPlayer').value = name;
+  document.getElementById('fSearch').value = '';
+  searchLogs();
+}
+
+function quickTraceItem(name) {
+  switchTab('trace-item');
+  document.getElementById('traceItem').value = name;
+  traceItem();
+}
+
+function clearFilters() {
+  ['fSearch','fPlayer','fItem','fTarget'].forEach(id => document.getElementById(id).value = '');
+  ['fCategory','fAction','fLevel'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('logsBody').innerHTML = '<tr><td colspan="10" class="empty">Utilisez les filtres pour rechercher</td></tr>';
+  document.getElementById('logsPagination').innerHTML = '';
+}
+
+// Item trace
+async function traceItem() {
+  const item = document.getElementById('traceItem').value.trim();
+  if (!item) return;
+  const data = await (await fetch('/api/logs/trace/item?item=' + encodeURIComponent(item))).json();
+  const el = document.getElementById('itemTimeline');
+
+  if (data.length === 0) {
+    el.innerHTML = '<p style="color:var(--text-muted);padding:20px">Aucun log trouve pour "' + escapeHtml(item) + '"</p>';
+    return;
+  }
+
+  el.innerHTML = data.map(l => {
+    const actionColor = l.action === 'Drop' ? 'var(--warning)' : l.action === 'Recolt' || l.action === 'PickUp' ? 'var(--success)' : l.action === 'Craft' ? 'var(--violet-light)' : l.level === 'warning' ? 'var(--danger)' : 'var(--info)';
+    const pos = (l.x != null) ? ' @ ' + Math.round(l.x) + ',' + Math.round(l.y) + ',' + Math.round(l.z) : '';
+    return '<div class="timeline-item">' +
+      '<div class="timeline-dot" style="background:' + actionColor + ';box-shadow:0 0 8px ' + actionColor + '"></div>' +
+      '<div class="timeline-content" style="flex-direction:column;gap:2px">' +
+        '<div style="display:flex;gap:12px;align-items:center">' +
+          '<span class="timeline-date">' + formatDate(l.timestamp) + '</span>' +
+          '<span style="color:' + actionColor + ';font-weight:700;font-size:12px">' + escapeHtml(l.action) + '</span>' +
+          levelBadge(l.level) +
+        '</div>' +
+        '<div class="timeline-detail">' +
+          '<strong>' + escapeHtml(l.player_name || '?') + '</strong>' +
+          (l.target_player ? ' &#8594; <strong>' + escapeHtml(l.target_player) + '</strong>' : '') +
+          ' | ' + escapeHtml(l.item_name || '') + (l.item_count ? ' x' + l.item_count : '') +
+          (l.world ? ' | ' + l.world + pos : '') +
+          (l.detail ? ' | <em>' + escapeHtml(l.detail) + '</em>' : '') +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+// Player trace
+async function tracePlayer() {
+  const name = document.getElementById('tracePlayer').value.trim();
+  if (!name) return;
+  const cat = document.getElementById('tracePlayerCat').value;
+  let url = '/api/logs/trace/player?player=' + encodeURIComponent(name);
+
+  const data = await (await fetch(url)).json();
+  const el = document.getElementById('playerTraceResults');
+
+  // Filter by category client-side if set
+  const logs = cat ? data.filter(l => l.category === cat) : data;
+
+  if (logs.length === 0) {
+    el.innerHTML = '<p style="color:var(--text-muted);padding:20px">Aucun log pour "' + escapeHtml(name) + '"</p>';
+    return;
+  }
+
+  // Group by day
+  const byDay = {};
+  logs.forEach(l => {
+    const day = new Date(l.timestamp).toLocaleDateString('fr-FR');
+    if (!byDay[day]) byDay[day] = [];
+    byDay[day].push(l);
+  });
+
+  el.innerHTML = Object.entries(byDay).map(([day, dayLogs]) =>
+    '<div style="margin-bottom:20px">' +
+      '<h4 style="color:var(--violet-light);font-size:13px;margin-bottom:8px;font-weight:700">' + day + ' <span style="color:var(--text-muted);font-weight:500">(' + dayLogs.length + ' events)</span></h4>' +
+      '<div class="timeline">' +
+        dayLogs.map(l => {
+          const actionColor = l.level === 'warning' ? 'var(--warning)' : 'var(--violet)';
+          const pos = (l.x != null) ? Math.round(l.x) + ',' + Math.round(l.y) + ',' + Math.round(l.z) : '';
+          const time = new Date(l.timestamp).toLocaleTimeString('fr-FR');
+          return '<div class="timeline-item">' +
+            '<div class="timeline-dot" style="' + (l.level === 'warning' ? 'background:var(--warning);box-shadow:0 0 8px var(--warning)' : '') + '"></div>' +
+            '<div class="timeline-content" style="flex-direction:column;gap:1px">' +
+              '<div style="display:flex;gap:10px;align-items:center">' +
+                '<span style="color:var(--text-secondary);font-weight:600;min-width:60px;font-size:12px">' + time + '</span>' +
+                '<span style="color:var(--violet-light);font-weight:700;font-size:11px">' + escapeHtml(l.category) + '</span>' +
+                '<span style="font-weight:600;font-size:12px">' + escapeHtml(l.action) + '</span>' +
+                levelBadge(l.level) +
+              '</div>' +
+              '<div class="timeline-detail" style="padding-left:70px">' +
+                (l.item_name ? '<span style="color:var(--pink-light);font-weight:600">' + escapeHtml(l.item_name) + (l.item_count ? ' x' + l.item_count : '') + '</span> | ' : '') +
+                (l.target_player ? 'cible: <strong>' + escapeHtml(l.target_player) + '</strong> | ' : '') +
+                (l.world ? l.world + (pos ? ' ' + pos : '') + ' | ' : '') +
+                (l.detail || '') +
+              '</div>' +
+            '</div>' +
+          '</div>';
+        }).join('') +
+      '</div>' +
+    '</div>'
+  ).join('');
+}
+
+function exportResults() {
+  if (!lastSearchResults.length) return alert('Rien a exporter. Faites une recherche d\'abord.');
+  const headers = ['date','joueur','categorie','action','detail','item','quantite','cible','monde','x','y','z','niveau'];
+  const rows = lastSearchResults.map(l => [
+    formatDate(l.timestamp), l.player_name||'', l.category, l.action, l.detail||'', l.item_name||'', l.item_count||'', l.target_player||'', l.world||'', l.x||'', l.y||'', l.z||'', l.level
+  ]);
+  const csv = [headers.join(';'), ...rows.map(r => r.map(v => '"' + String(v).replace(/"/g,'""') + '"').join(';'))].join('\n');
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'logs_export.csv'; a.click();
+}
+
+// Load stats & charts
+async function loadStats() {
+  const stats = await (await fetch('/api/logs/stats')).json();
+  document.getElementById('lTotal').textContent = stats.totalLogs.toLocaleString('fr-FR');
+  document.getElementById('lLast24h').textContent = stats.logsLast24h.toLocaleString('fr-FR');
+  document.getElementById('lWarnings').textContent = stats.warnings.toLocaleString('fr-FR');
+  document.getElementById('lWarnings24h').textContent = stats.warningsLast24h + ' dans les 24h';
+
+  // Top players
+  if (stats.topPlayers.length > 0) {
+    new Chart(document.getElementById('topPlayersChart'), {
+      type: 'bar',
+      data: {
+        labels: stats.topPlayers.map(p => p.player_name),
+        datasets: [{ data: stats.topPlayers.map(p => p.count), backgroundColor: C.palette.map(c => c + '60'), borderColor: C.palette, borderWidth: 1.5, borderRadius: 6 }]
+      },
+      options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: C.tickColor }, grid: { color: C.gridColor } }, y: { ticks: { color: '#b4a9d6', font: { weight: 600 } }, grid: { color: C.gridColor } } } }
+    });
+  }
+
+  // Top items
+  if (stats.topItems.length > 0) {
+    new Chart(document.getElementById('topItemsChart'), {
+      type: 'bar',
+      data: {
+        labels: stats.topItems.map(i => i.item_name),
+        datasets: [{ data: stats.topItems.map(i => i.count), backgroundColor: C.palette.map(c => c + '60'), borderColor: C.palette, borderWidth: 1.5, borderRadius: 6 }]
+      },
+      options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: C.tickColor }, grid: { color: C.gridColor } }, y: { ticks: { color: '#b4a9d6', font: { weight: 600 } }, grid: { color: C.gridColor } } } }
+    });
+  }
+}
+
+// Enter key triggers search
+['fSearch','fPlayer','fItem','fTarget'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') searchLogs(); });
+});
+document.getElementById('traceItem').addEventListener('keydown', e => { if (e.key === 'Enter') traceItem(); });
+document.getElementById('tracePlayer').addEventListener('keydown', e => { if (e.key === 'Enter') tracePlayer(); });
+
+loadCategories();
+loadStats();
+// Auto-load last 50 logs
+searchLogs();
+</script>
+
+<style>
+.log-warning td { background: rgba(251, 191, 36, 0.03) !important; }
+.log-warning:hover td { background: rgba(251, 191, 36, 0.07) !important; }
+</style>
+
+<%- include('partials/footer') %>

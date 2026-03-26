@@ -152,6 +152,31 @@ async function main() {
     FOREIGN KEY (player_uuid) REFERENCES players(uuid)
   )`);
 
+  db.run(`CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_uuid TEXT,
+    player_name TEXT,
+    category TEXT NOT NULL,
+    action TEXT NOT NULL,
+    detail TEXT,
+    item_name TEXT,
+    item_count INTEGER,
+    target_player TEXT,
+    world TEXT,
+    x REAL,
+    y REAL,
+    z REAL,
+    level TEXT DEFAULT 'info',
+    timestamp INTEGER NOT NULL
+  )`);
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_logs_player ON logs(player_name)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_logs_category ON logs(category)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_logs_action ON logs(action)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_logs_item ON logs(item_name)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_logs_target ON logs(target_player)`);
+
   saveDbNow();
 
   // Middleware
@@ -267,6 +292,106 @@ async function main() {
       }
     }
     res.json({ success: true, count: events.length });
+  });
+
+  // Log ingestion (single)
+  app.post("/api/ingest/log", apiAuth, (req, res) => {
+    const { uuid, player, category, action, detail, item_name, item_count, target_player, world, x, y, z, level, timestamp } = req.body;
+    run(`INSERT INTO logs (player_uuid, player_name, category, action, detail, item_name, item_count, target_player, world, x, y, z, level, timestamp) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [uuid || null, player || null, category, action, detail || null, item_name || null, item_count || null, target_player || null, world || null, x || null, y || null, z || null, level || "info", timestamp || Date.now()]);
+    res.json({ success: true });
+  });
+
+  // Log batch ingestion
+  app.post("/api/ingest/logs", apiAuth, (req, res) => {
+    const { logs: entries } = req.body;
+    if (!Array.isArray(entries)) return res.status(400).json({ error: "logs must be an array" });
+    for (const e of entries) {
+      run(`INSERT INTO logs (player_uuid, player_name, category, action, detail, item_name, item_count, target_player, world, x, y, z, level, timestamp) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [e.uuid || null, e.player || null, e.category, e.action, e.detail || null, e.item_name || null, e.item_count || null, e.target_player || null, e.world || null, e.x || null, e.y || null, e.z || null, e.level || "info", e.timestamp || Date.now()]);
+    }
+    res.json({ success: true, count: entries.length });
+  });
+
+  // ===================== LOGS API =====================
+
+  // Search logs with filters
+  app.get("/api/logs", (req, res) => {
+    const { player, category, action, item, target, world, level, search, from, to, limit = 100, offset = 0 } = req.query;
+    let where = [];
+    let params = [];
+
+    if (player) { where.push("(player_name LIKE ? OR player_uuid = ?)"); params.push(`%${player}%`, player); }
+    if (category) { where.push("category = ?"); params.push(category); }
+    if (action) { where.push("action LIKE ?"); params.push(`%${action}%`); }
+    if (item) { where.push("item_name LIKE ?"); params.push(`%${item}%`); }
+    if (target) { where.push("(target_player LIKE ?)"); params.push(`%${target}%`); }
+    if (world) { where.push("world = ?"); params.push(world); }
+    if (level) { where.push("level = ?"); params.push(level); }
+    if (search) { where.push("(detail LIKE ? OR action LIKE ? OR item_name LIKE ? OR player_name LIKE ? OR target_player LIKE ?)"); params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`); }
+    if (from) { where.push("timestamp >= ?"); params.push(Number(from)); }
+    if (to) { where.push("timestamp <= ?"); params.push(Number(to)); }
+
+    const whereClause = where.length > 0 ? "WHERE " + where.join(" AND ") : "";
+    const total = getOne(`SELECT COUNT(*) as count FROM logs ${whereClause}`, params).count;
+    const logs = getAll(`SELECT * FROM logs ${whereClause} ORDER BY timestamp DESC LIMIT ? OFFSET ?`, [...params, Number(limit), Number(offset)]);
+
+    res.json({ logs, total });
+  });
+
+  // Get all categories
+  app.get("/api/logs/categories", (req, res) => {
+    res.json(getAll("SELECT category, COUNT(*) as count FROM logs GROUP BY category ORDER BY count DESC"));
+  });
+
+  // Get all actions for a category
+  app.get("/api/logs/actions", (req, res) => {
+    const { category } = req.query;
+    let q = "SELECT action, COUNT(*) as count FROM logs";
+    const p = [];
+    if (category) { q += " WHERE category = ?"; p.push(category); }
+    q += " GROUP BY action ORDER BY count DESC";
+    res.json(getAll(q, p));
+  });
+
+  // Item trace: follow an item across all events
+  app.get("/api/logs/trace/item", (req, res) => {
+    const { item, from, to, limit = 200 } = req.query;
+    if (!item) return res.status(400).json({ error: "item parameter required" });
+    let where = "WHERE item_name LIKE ?";
+    const params = [`%${item}%`];
+    if (from) { where += " AND timestamp >= ?"; params.push(Number(from)); }
+    if (to) { where += " AND timestamp <= ?"; params.push(Number(to)); }
+    const logs = getAll(`SELECT * FROM logs ${where} ORDER BY timestamp ASC LIMIT ?`, [...params, Number(limit)]);
+    res.json(logs);
+  });
+
+  // Player timeline: every single log for a player, chronological
+  app.get("/api/logs/trace/player", (req, res) => {
+    const { player, from, to, limit = 300 } = req.query;
+    if (!player) return res.status(400).json({ error: "player parameter required" });
+    let where = "WHERE (player_name LIKE ? OR target_player LIKE ?)";
+    const params = [`%${player}%`, `%${player}%`];
+    if (from) { where += " AND timestamp >= ?"; params.push(Number(from)); }
+    if (to) { where += " AND timestamp <= ?"; params.push(Number(to)); }
+    const logs = getAll(`SELECT * FROM logs ${where} ORDER BY timestamp DESC LIMIT ?`, [...params, Number(limit)]);
+    res.json(logs);
+  });
+
+  // Logs stats overview
+  app.get("/api/logs/stats", (req, res) => {
+    const now = Date.now();
+    const day = 86400000;
+    res.json({
+      totalLogs: getOne("SELECT COUNT(*) as count FROM logs").count,
+      logsLast24h: getOne("SELECT COUNT(*) as count FROM logs WHERE timestamp > ?", [now - day]).count,
+      warnings: getOne("SELECT COUNT(*) as count FROM logs WHERE level = 'warning'").count,
+      warningsLast24h: getOne("SELECT COUNT(*) as count FROM logs WHERE level = 'warning' AND timestamp > ?", [now - day]).count,
+      topPlayers: getAll("SELECT player_name, COUNT(*) as count FROM logs WHERE player_name IS NOT NULL GROUP BY player_name ORDER BY count DESC LIMIT 10"),
+      topItems: getAll("SELECT item_name, COUNT(*) as count FROM logs WHERE item_name IS NOT NULL AND item_name != '' GROUP BY item_name ORDER BY count DESC LIMIT 10"),
+      topActions: getAll("SELECT action, COUNT(*) as count FROM logs GROUP BY action ORDER BY count DESC LIMIT 10"),
+      byLevel: getAll("SELECT level, COUNT(*) as count FROM logs GROUP BY level ORDER BY count DESC"),
+    });
   });
 
   // ===================== DASHBOARD API =====================
@@ -445,6 +570,7 @@ async function main() {
   app.get("/player/:uuid", (req, res) => res.render("player-detail", { uuid: req.params.uuid }));
   app.get("/retention", (req, res) => res.render("retention"));
   app.get("/worlds", (req, res) => res.render("worlds"));
+  app.get("/logs", (req, res) => res.render("logs"));
 
   // Save DB on shutdown
   process.on("SIGINT", () => { saveDbNow(); process.exit(0); });
