@@ -1,0 +1,167 @@
+<%- include('partials/header', { title: 'Joueurs' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Joueurs</h1>
+    <p class="subtitle">Liste complete de tous les joueurs du serveur</p>
+  </div>
+  <div class="header-actions">
+    <input type="text" id="searchInput" class="text-input" placeholder="Rechercher un joueur...">
+    <select id="sortBy" class="select-input">
+      <option value="last_seen">Derniere connexion</option>
+      <option value="first_seen">Date d'inscription</option>
+      <option value="total_playtime">Temps de jeu</option>
+      <option value="session_count">Sessions</option>
+      <option value="username">Nom</option>
+    </select>
+  </div>
+</div>
+
+<!-- Quick stats -->
+<div class="stats-grid" id="playerStats">
+  <div class="stat-card">
+    <div class="stat-icon purple">&#9824;</div>
+    <div class="stat-label">Total inscrits</div>
+    <div class="stat-value gradient" id="pTotal">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon green">&#9679;</div>
+    <div class="stat-label">En ligne / Recents</div>
+    <div class="stat-value" id="pOnline">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon orange">&#9888;</div>
+    <div class="stat-label">A risque (3-7j)</div>
+    <div class="stat-value" id="pAtRisk">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon red">&#9760;</div>
+    <div class="stat-label">Perdus (30j+)</div>
+    <div class="stat-value" id="pChurned">-</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Joueur</th>
+          <th>Plateforme</th>
+          <th>Temps de jeu</th>
+          <th>Sessions</th>
+          <th>Moy / session</th>
+          <th>Premiere co.</th>
+          <th>Derniere co.</th>
+          <th>Statut</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="playersBody">
+        <tr><td colspan="9" class="loading">Chargement...</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination" id="pagination"></div>
+</div>
+
+<script>
+const PAGE_SIZE = 30;
+let currentPage = 0, currentSort = 'last_seen', searchTerm = '';
+
+function formatDuration(ms) {
+  if (!ms) return '0m';
+  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  return h > 0 ? h + 'h ' + m + 'm' : m + 'm';
+}
+
+function formatDate(ts) {
+  if (!ts) return '-';
+  return new Date(ts).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function relativeTime(ts) {
+  if (!ts) return '-';
+  const diff = Date.now() - ts;
+  const m = Math.floor(diff / 60000), h = Math.floor(diff / 3600000), d = Math.floor(diff / 86400000);
+  if (m < 5) return 'A l\'instant';
+  if (m < 60) return 'Il y a ' + m + 'm';
+  if (h < 24) return 'Il y a ' + h + 'h';
+  if (d < 30) return 'Il y a ' + d + 'j';
+  return 'Il y a ' + Math.floor(d / 30) + ' mois';
+}
+
+function getStatus(lastSeen) {
+  const diff = Date.now() - lastSeen;
+  if (diff < 300000) return '<span class="badge badge-online">En ligne</span>';
+  if (diff < 86400000) return '<span class="badge badge-recent">Recent</span>';
+  if (diff < 604800000) return '<span class="badge badge-away">Absent</span>';
+  return '<span class="badge badge-offline">Inactif</span>';
+}
+
+function platformIcon(p) {
+  const map = { 'Windows': 'W', 'Android': 'A', 'iOS': 'i', 'Xbox': 'X', 'PlayStation': 'P', 'Switch': 'S', 'Linux': 'L' };
+  return '<span class="platform-badge" title="' + p + '">' + (map[p] || '?') + '</span>';
+}
+
+async function loadPlayers() {
+  const url = '/api/players?sort=' + currentSort + '&order=DESC&limit=' + PAGE_SIZE + '&offset=' + (currentPage * PAGE_SIZE) + (searchTerm ? '&search=' + encodeURIComponent(searchTerm) : '');
+  const data = await (await fetch(url)).json();
+
+  // Update top stats
+  document.getElementById('pTotal').textContent = data.total;
+  const now = Date.now();
+  let online = 0, atRisk = 0, churned = 0;
+  // These are approximate since we only have a page; use churn endpoint for accuracy
+  const churn = await (await fetch('/api/stats/churn')).json();
+  churn.forEach(c => {
+    if (c.label.includes('Actif') || c.label.includes('Recent')) online += c.count;
+    else if (c.label.includes('risque')) atRisk += c.count;
+    else if (c.label.includes('Perdu')) churned += c.count;
+  });
+  document.getElementById('pOnline').textContent = online;
+  document.getElementById('pAtRisk').textContent = atRisk;
+  document.getElementById('pChurned').textContent = churned;
+
+  const tbody = document.getElementById('playersBody');
+  if (data.players.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">Aucun joueur trouve</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = data.players.map(p => {
+    const avgSession = p.session_count > 0 ? formatDuration(Math.round(p.total_playtime / p.session_count)) : '-';
+    return '<tr class="clickable-row" onclick="window.location=\'/player/' + p.uuid + '\'">' +
+      '<td><strong>' + p.username + '</strong></td>' +
+      '<td>' + platformIcon(p.platform) + ' ' + p.platform + '</td>' +
+      '<td>' + formatDuration(p.total_playtime) + '</td>' +
+      '<td>' + p.session_count + '</td>' +
+      '<td>' + avgSession + '</td>' +
+      '<td>' + formatDate(p.first_seen) + '</td>' +
+      '<td title="' + formatDate(p.last_seen) + '">' + relativeTime(p.last_seen) + '</td>' +
+      '<td>' + getStatus(p.last_seen) + '</td>' +
+      '<td><a href="/player/' + p.uuid + '" class="btn btn-sm">Voir</a></td>' +
+    '</tr>';
+  }).join('');
+
+  const totalPages = Math.ceil(data.total / PAGE_SIZE);
+  document.getElementById('pagination').innerHTML =
+    (currentPage > 0 ? '<button class="btn btn-sm" onclick="changePage(' + (currentPage - 1) + ')">&#8592; Precedent</button>' : '') +
+    '<span class="page-info">Page ' + (currentPage + 1) + ' / ' + Math.max(totalPages, 1) + ' (' + data.total + ' joueurs)</span>' +
+    (currentPage < totalPages - 1 ? '<button class="btn btn-sm" onclick="changePage(' + (currentPage + 1) + ')">Suivant &#8594;</button>' : '');
+}
+
+function changePage(p) { currentPage = p; loadPlayers(); }
+
+document.getElementById('sortBy').addEventListener('change', e => { currentSort = e.target.value; currentPage = 0; loadPlayers(); });
+
+let searchTimeout;
+document.getElementById('searchInput').addEventListener('input', e => {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => { searchTerm = e.target.value; currentPage = 0; loadPlayers(); }, 300);
+});
+
+loadPlayers();
+</script>
+
+<%- include('partials/footer') %>

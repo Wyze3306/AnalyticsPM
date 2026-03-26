@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCPE Analytics - <%= typeof title !== 'undefined' ? title : 'Dashboard' %></title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <div class="logo-icon">&#9670;</div>
+        <div>
+          <div>Analytics</div>
+          <div class="logo-sub">MCPE Server Panel</div>
+        </div>
+      </div>
+    </div>
+    <ul class="nav-links">
+      <li><a href="/" class="nav-link" data-page="dashboard">
+        <span class="nav-icon">&#9632;</span> Dashboard
+      </a></li>
+      <li><a href="/players" class="nav-link" data-page="players">
+        <span class="nav-icon">&#9824;</span> Joueurs
+      </a></li>
+      <li><a href="/retention" class="nav-link" data-page="retention">
+        <span class="nav-icon">&#8634;</span> Retention
+      </a></li>
+      <li><a href="/worlds" class="nav-link" data-page="worlds">
+        <span class="nav-icon">&#9789;</span> Mondes
+      </a></li>
+    </ul>
+    <div class="sidebar-footer">
+      <div class="server-status" id="serverStatus">
+        <span class="status-dot online"></span>
+        <span>Serveur connecte</span>
+      </div>
+    </div>
+  </nav>
+  <main class="content">

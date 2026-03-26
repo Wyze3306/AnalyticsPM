@@ -1,0 +1,218 @@
+<%- include('partials/header', { title: 'Mondes' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Analyse des mondes</h1>
+    <p class="subtitle">Ou vos joueurs passent le plus de temps</p>
+  </div>
+</div>
+
+<!-- World KPIs -->
+<div class="stats-grid" id="worldKpis">
+  <div class="stat-card highlight">
+    <div class="stat-icon purple">&#9789;</div>
+    <div class="stat-label">Mondes actifs</div>
+    <div class="stat-value gradient" id="wTotal">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon pink">&#9733;</div>
+    <div class="stat-label">Monde le plus populaire</div>
+    <div class="stat-value small" id="wTop">-</div>
+    <div class="stat-sub" id="wTopSub">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon green">&#9203;</div>
+    <div class="stat-label">Temps total en jeu</div>
+    <div class="stat-value" id="wTotalTime">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon blue">&#9824;</div>
+    <div class="stat-label">Visites totales</div>
+    <div class="stat-value" id="wTotalVisits">-</div>
+  </div>
+</div>
+
+<!-- Insights -->
+<div class="insights-grid" id="worldInsights" style="display:none"></div>
+
+<div class="charts-grid">
+  <div class="chart-card">
+    <h3><span class="chart-dot purple"></span> Joueurs uniques par monde</h3>
+    <canvas id="worldPlayersChart"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3><span class="chart-dot pink"></span> Repartition du temps</h3>
+    <canvas id="worldTimeChart"></canvas>
+  </div>
+</div>
+
+<div class="charts-grid">
+  <div class="chart-card wide">
+    <h3><span class="chart-dot green"></span> Temps moyen par visite</h3>
+    <canvas id="worldAvgChart" height="70"></canvas>
+  </div>
+</div>
+
+<!-- Detailed table -->
+<div class="card">
+  <h3>Detail des mondes</h3>
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Monde</th>
+          <th>Joueurs uniques</th>
+          <th>Visites totales</th>
+          <th>Temps total</th>
+          <th>Temps moy/visite</th>
+          <th>Popularite</th>
+        </tr>
+      </thead>
+      <tbody id="worldsBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const C = {
+  palette: ['#8b5cf6', '#ec4899', '#d946ef', '#60a5fa', '#34d399', '#fbbf24', '#f87171', '#a78bfa', '#f472b6', '#14b8a6'],
+  violet: '#8b5cf6', pink: '#ec4899', green: '#34d399',
+  gridColor: 'rgba(139, 92, 246, 0.06)', tickColor: '#7b6fa0',
+};
+
+function formatDuration(ms) {
+  if (!ms) return '0m';
+  const d = Math.floor(ms / 86400000), h = Math.floor((ms % 86400000) / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  if (d > 0) return d + 'j ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+
+async function loadWorlds() {
+  const data = await (await fetch('/api/stats/worlds')).json();
+
+  // KPIs
+  document.getElementById('wTotal').textContent = data.length;
+  if (data.length > 0) {
+    document.getElementById('wTop').textContent = data[0].world_name;
+    document.getElementById('wTopSub').textContent = data[0].unique_players + ' joueurs uniques';
+  }
+  const totalTime = data.reduce((s, w) => s + (w.total_time || 0), 0);
+  const totalVisits = data.reduce((s, w) => s + w.total_visits, 0);
+  document.getElementById('wTotalTime').textContent = formatDuration(totalTime);
+  document.getElementById('wTotalVisits').textContent = totalVisits.toLocaleString('fr-FR');
+
+  // Insights
+  generateWorldInsights(data, totalTime);
+
+  // Players chart
+  new Chart(document.getElementById('worldPlayersChart'), {
+    type: 'bar',
+    data: {
+      labels: data.map(w => w.world_name),
+      datasets: [{
+        label: 'Joueurs uniques',
+        data: data.map(w => w.unique_players),
+        backgroundColor: data.map((_, i) => C.palette[i % C.palette.length] + '60'),
+        borderColor: data.map((_, i) => C.palette[i % C.palette.length]),
+        borderWidth: 1.5, borderRadius: 8,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a1535', titleColor: '#f0ecff', bodyColor: '#b4a9d6', borderColor: 'rgba(139,92,246,0.3)', borderWidth: 1, cornerRadius: 10, padding: 12 } },
+      scales: { x: { ticks: { color: '#b4a9d6', font: { weight: 600 } }, grid: { color: C.gridColor } }, y: { ticks: { color: C.tickColor }, grid: { color: C.gridColor } } }
+    }
+  });
+
+  // Time doughnut
+  new Chart(document.getElementById('worldTimeChart'), {
+    type: 'doughnut',
+    data: {
+      labels: data.map(w => w.world_name),
+      datasets: [{
+        data: data.map(w => w.total_time || 1),
+        backgroundColor: C.palette,
+        borderColor: '#1a1535', borderWidth: 3,
+      }]
+    },
+    options: {
+      responsive: true, cutout: '60%',
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#b4a9d6', font: { family: 'Inter', weight: 600, size: 11 }, padding: 14, usePointStyle: true } },
+        tooltip: { backgroundColor: '#1a1535', titleColor: '#f0ecff', bodyColor: '#b4a9d6', borderColor: 'rgba(139,92,246,0.3)', borderWidth: 1, cornerRadius: 10, padding: 12,
+          callbacks: { label: item => item.label + ': ' + formatDuration(data[item.dataIndex].total_time) + ' (' + (totalTime > 0 ? Math.round((data[item.dataIndex].total_time || 0) / totalTime * 100) : 0) + '%)' }
+        }
+      }
+    }
+  });
+
+  // Avg time per visit chart
+  new Chart(document.getElementById('worldAvgChart'), {
+    type: 'bar',
+    data: {
+      labels: data.map(w => w.world_name),
+      datasets: [{
+        label: 'Temps moyen (min)',
+        data: data.map(w => w.total_visits > 0 ? Math.round((w.total_time || 0) / w.total_visits / 60000) : 0),
+        backgroundColor: data.map((_, i) => {
+          const colors = [C.violet + '50', C.pink + '50'];
+          return colors[i % 2];
+        }),
+        borderColor: data.map((_, i) => [C.violet, C.pink][i % 2]),
+        borderWidth: 1.5, borderRadius: 8,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a1535', titleColor: '#f0ecff', bodyColor: '#b4a9d6', borderColor: 'rgba(139,92,246,0.3)', borderWidth: 1, cornerRadius: 10, padding: 12,
+        callbacks: { label: item => formatDuration(data[item.dataIndex].total_visits > 0 ? (data[item.dataIndex].total_time || 0) / data[item.dataIndex].total_visits : 0) + ' en moyenne' }
+      } },
+      scales: { x: { ticks: { color: '#b4a9d6', font: { weight: 600 } }, grid: { color: C.gridColor } }, y: { ticks: { color: C.tickColor, callback: v => v + 'm' }, grid: { color: C.gridColor } } }
+    }
+  });
+
+  // Table
+  const maxPlayers = Math.max(...data.map(w => w.unique_players), 1);
+  document.getElementById('worldsBody').innerHTML = data.map((w, i) => {
+    const avgTime = w.total_visits > 0 ? (w.total_time || 0) / w.total_visits : 0;
+    const pct = Math.round((w.unique_players / maxPlayers) * 100);
+    return '<tr>' +
+      '<td><strong style="color:' + C.palette[i % C.palette.length] + '">' + w.world_name + '</strong></td>' +
+      '<td>' + w.unique_players + '</td>' +
+      '<td>' + w.total_visits + '</td>' +
+      '<td>' + formatDuration(w.total_time) + '</td>' +
+      '<td>' + formatDuration(avgTime) + '</td>' +
+      '<td><div class="mini-bar-track" style="width:120px;display:inline-block;vertical-align:middle"><div class="mini-bar-fill" style="width:' + pct + '%"></div></div> <span style="color:var(--text-muted);font-size:12px;font-weight:600">' + pct + '%</span></td>' +
+    '</tr>';
+  }).join('') || '<tr><td colspan="6" class="empty">Aucune donnee de monde</td></tr>';
+}
+
+function generateWorldInsights(data, totalTime) {
+  const grid = document.getElementById('worldInsights');
+  const insights = [];
+
+  if (data.length >= 2) {
+    const topPct = totalTime > 0 ? Math.round(((data[0].total_time || 0) / totalTime) * 100) : 0;
+    if (topPct > 70) {
+      insights.push({ icon: '&#9888;', color: 'orange', title: data[0].world_name + ' concentre ' + topPct + '% du temps', text: 'Les joueurs passent la quasi-totalite de leur temps dans un seul monde. Enrichissez les autres mondes pour diversifier l\'experience.' });
+    }
+  }
+
+  const lowEngagement = data.filter(w => w.unique_players <= 1 && w.total_visits > 0);
+  if (lowEngagement.length > 0) {
+    insights.push({ icon: '&#9789;', color: 'purple', title: lowEngagement.length + ' monde(s) sous-utilise(s)', text: lowEngagement.map(w => w.world_name).join(', ') + ' - tres peu de joueurs y vont. Ajoutez du contenu ou retirez-les.' });
+  }
+
+  if (insights.length > 0) {
+    grid.style.display = 'grid';
+    grid.innerHTML = insights.map(i =>
+      '<div class="insight-card"><div class="insight-icon ' + i.color + '">' + i.icon + '</div><div class="insight-content"><h4>' + i.title + '</h4><p>' + i.text + '</p></div></div>'
+    ).join('');
+  }
+}
+
+loadWorlds();
+</script>
+
+<%- include('partials/footer') %>

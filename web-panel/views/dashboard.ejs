@@ -1,0 +1,431 @@
+<%- include('partials/header', { title: 'Dashboard' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Dashboard</h1>
+    <p class="subtitle">Vue d'ensemble de votre serveur en temps reel</p>
+  </div>
+  <div class="header-actions">
+    <select id="timeRange" class="select-input">
+      <option value="7">7 derniers jours</option>
+      <option value="14">14 derniers jours</option>
+      <option value="30" selected>30 derniers jours</option>
+      <option value="90">90 derniers jours</option>
+    </select>
+    <button class="btn btn-primary" onclick="refreshDashboard()">Actualiser</button>
+  </div>
+</div>
+
+<!-- KPI Cards -->
+<div class="stats-grid">
+  <div class="stat-card highlight">
+    <div class="stat-icon purple">&#9824;</div>
+    <div class="stat-label">Joueurs totaux</div>
+    <div class="stat-value gradient" id="totalPlayers">-</div>
+    <div class="stat-sub">Depuis le lancement</div>
+  </div>
+  <div class="stat-card highlight-pink">
+    <div class="stat-icon pink">&#9829;</div>
+    <div class="stat-label">Actifs (24h)</div>
+    <div class="stat-value" id="activeLast24h">-</div>
+    <div class="stat-sub" id="newLast24hSub">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon blue">&#9733;</div>
+    <div class="stat-label">Actifs (7j)</div>
+    <div class="stat-value" id="activeLast7d">-</div>
+    <div class="stat-sub" id="newLast7dSub">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon green">&#9203;</div>
+    <div class="stat-label">Temps de jeu moyen</div>
+    <div class="stat-value" id="avgPlaytime">-</div>
+    <div class="stat-sub">Par joueur</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon orange">&#9881;</div>
+    <div class="stat-label">Sessions moyennes</div>
+    <div class="stat-value" id="avgSessions">-</div>
+    <div class="stat-sub">Par joueur</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon red">&#9760;</div>
+    <div class="stat-label">Morts totales</div>
+    <div class="stat-value" id="totalDeaths">-</div>
+    <div class="stat-sub" id="totalCommandsSub">- commandes</div>
+  </div>
+</div>
+
+<!-- Insights -->
+<div class="insights-grid" id="insightsGrid" style="display:none">
+</div>
+
+<!-- Main chart -->
+<div class="charts-grid">
+  <div class="chart-card wide">
+    <h3><span class="chart-dot purple"></span> Joueurs actifs par jour</h3>
+    <canvas id="dailyPlayersChart" height="85"></canvas>
+  </div>
+</div>
+
+<!-- Row 2 -->
+<div class="charts-grid">
+  <div class="chart-card">
+    <h3><span class="chart-dot pink"></span> Repartition des plateformes</h3>
+    <canvas id="platformChart"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3><span class="chart-dot purple"></span> Risque de churn</h3>
+    <canvas id="churnChart"></canvas>
+  </div>
+</div>
+
+<!-- Row 3: Heatmap + engagement -->
+<div class="charts-grid">
+  <div class="chart-card wide">
+    <h3><span class="chart-dot green"></span> Heures de pointe</h3>
+    <div class="heatmap-grid" id="heatmapGrid"></div>
+    <div class="heatmap-labels" id="heatmapLabels"></div>
+  </div>
+</div>
+
+<!-- Row 4: Commands + Session duration distribution -->
+<div class="charts-grid">
+  <div class="chart-card">
+    <h3><span class="chart-dot purple"></span> Top commandes</h3>
+    <canvas id="commandsChart"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3><span class="chart-dot pink"></span> Distribution des sessions</h3>
+    <canvas id="sessionDistChart"></canvas>
+  </div>
+</div>
+
+<!-- Row 5: Worlds + engagement -->
+<div class="charts-grid">
+  <div class="chart-card">
+    <h3><span class="chart-dot green"></span> Mondes populaires</h3>
+    <canvas id="worldsChart"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3><span class="chart-dot pink"></span> Engagement joueurs</h3>
+    <div class="mini-bar-container" id="engagementBars">
+      <div class="loading">Chargement...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let charts = {};
+const C = {
+  violet: '#8b5cf6', violetLight: '#a78bfa',
+  pink: '#ec4899', pinkLight: '#f472b6',
+  fuchsia: '#d946ef',
+  green: '#34d399', blue: '#60a5fa',
+  orange: '#fbbf24', red: '#f87171',
+  palette: ['#8b5cf6', '#ec4899', '#d946ef', '#60a5fa', '#34d399', '#fbbf24', '#f87171', '#a78bfa', '#f472b6', '#14b8a6'],
+  gridColor: 'rgba(139, 92, 246, 0.06)',
+  tickColor: '#7b6fa0',
+};
+
+const chartDefaults = {
+  responsive: true,
+  plugins: {
+    legend: { labels: { color: '#b4a9d6', font: { family: 'Inter', weight: 600, size: 11 }, padding: 16, usePointStyle: true, pointStyle: 'circle' } },
+    tooltip: {
+      backgroundColor: '#1a1535',
+      titleColor: '#f0ecff',
+      bodyColor: '#b4a9d6',
+      borderColor: 'rgba(139, 92, 246, 0.3)',
+      borderWidth: 1,
+      cornerRadius: 10,
+      padding: 12,
+      titleFont: { family: 'Inter', weight: 700, size: 12 },
+      bodyFont: { family: 'Inter', weight: 500, size: 12 },
+      displayColors: true,
+      boxPadding: 4,
+    },
+  },
+  scales: {
+    x: { ticks: { color: C.tickColor, font: { family: 'Inter', size: 11, weight: 500 } }, grid: { color: C.gridColor } },
+    y: { ticks: { color: C.tickColor, font: { family: 'Inter', size: 11, weight: 500 } }, grid: { color: C.gridColor } },
+  }
+};
+
+function formatDuration(ms) {
+  if (!ms || ms === 0) return '0m';
+  const d = Math.floor(ms / 86400000);
+  const h = Math.floor((ms % 86400000) / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (d > 0) return d + 'j ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+
+async function fetchJSON(url) { return (await fetch(url)).json(); }
+
+function kill(name) { if (charts[name]) { charts[name].destroy(); charts[name] = null; } }
+
+function gradientFill(ctx, canvas, c1, c2) {
+  const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  g.addColorStop(0, c1);
+  g.addColorStop(1, c2);
+  return g;
+}
+
+async function refreshDashboard() {
+  const days = document.getElementById('timeRange').value;
+
+  const [overview, daily, platforms, peakHours, churn, commands, worlds, retention, players] = await Promise.all([
+    fetchJSON('/api/stats/overview'),
+    fetchJSON('/api/stats/daily-players?days=' + days),
+    fetchJSON('/api/stats/platforms'),
+    fetchJSON('/api/stats/peak-hours'),
+    fetchJSON('/api/stats/churn'),
+    fetchJSON('/api/stats/commands?limit=10'),
+    fetchJSON('/api/stats/worlds'),
+    fetchJSON('/api/stats/retention?days=' + days),
+    fetchJSON('/api/players?sort=total_playtime&order=DESC&limit=10'),
+  ]);
+
+  // KPIs
+  document.getElementById('totalPlayers').textContent = overview.totalPlayers.toLocaleString('fr-FR');
+  document.getElementById('activeLast24h').textContent = overview.activeLast24h.toLocaleString('fr-FR');
+  document.getElementById('activeLast7d').textContent = overview.activeLast7d.toLocaleString('fr-FR');
+  document.getElementById('newLast24hSub').textContent = '+' + overview.newLast24h + ' nouveaux aujourd\'hui';
+  document.getElementById('newLast7dSub').textContent = '+' + overview.newLast7d + ' nouveaux cette semaine';
+  document.getElementById('avgPlaytime').textContent = formatDuration(overview.avgPlaytime);
+  document.getElementById('avgSessions').textContent = overview.avgSessionCount;
+  document.getElementById('totalDeaths').textContent = overview.totalDeaths.toLocaleString('fr-FR');
+  document.getElementById('totalCommandsSub').textContent = overview.totalCommands.toLocaleString('fr-FR') + ' commandes executees';
+
+  // Insights
+  generateInsights(overview, retention, churn, platforms);
+
+  // Daily players chart
+  kill('dailyPlayers');
+  const dpCtx = document.getElementById('dailyPlayersChart').getContext('2d');
+  charts.dailyPlayers = new Chart(dpCtx, {
+    type: 'line',
+    data: {
+      labels: daily.map(d => d.date.slice(5)),
+      datasets: [{
+        label: 'Joueurs actifs',
+        data: daily.map(d => d.activePlayers),
+        borderColor: C.violet,
+        backgroundColor: gradientFill(dpCtx, dpCtx.canvas, 'rgba(139, 92, 246, 0.2)', 'rgba(139, 92, 246, 0)'),
+        fill: true, tension: 0.4, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5,
+        pointHoverBackgroundColor: C.violet, pointHoverBorderColor: '#fff', pointHoverBorderWidth: 2,
+      }, {
+        label: 'Nouveaux joueurs',
+        data: daily.map(d => d.newPlayers),
+        borderColor: C.pink,
+        backgroundColor: gradientFill(dpCtx, dpCtx.canvas, 'rgba(236, 72, 153, 0.15)', 'rgba(236, 72, 153, 0)'),
+        fill: true, tension: 0.4, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5,
+        pointHoverBackgroundColor: C.pink, pointHoverBorderColor: '#fff', pointHoverBorderWidth: 2,
+      }]
+    },
+    options: { ...chartDefaults, interaction: { mode: 'index', intersect: false } },
+  });
+
+  // Platform chart
+  kill('platform');
+  charts.platform = new Chart(document.getElementById('platformChart'), {
+    type: 'doughnut',
+    data: {
+      labels: platforms.map(p => p.platform),
+      datasets: [{ data: platforms.map(p => p.count), backgroundColor: C.palette, borderColor: '#1a1535', borderWidth: 3, hoverBorderWidth: 0 }]
+    },
+    options: {
+      responsive: true,
+      cutout: '65%',
+      plugins: {
+        ...chartDefaults.plugins,
+        legend: { ...chartDefaults.plugins.legend, position: 'bottom' },
+      },
+    }
+  });
+
+  // Churn chart
+  kill('churn');
+  const churnColors = [C.green, C.blue, C.orange, '#f97316', C.red];
+  charts.churn = new Chart(document.getElementById('churnChart'), {
+    type: 'doughnut',
+    data: {
+      labels: churn.map(c => c.label),
+      datasets: [{ data: churn.map(c => c.count), backgroundColor: churnColors, borderColor: '#1a1535', borderWidth: 3, hoverBorderWidth: 0 }]
+    },
+    options: {
+      responsive: true,
+      cutout: '65%',
+      plugins: {
+        ...chartDefaults.plugins,
+        legend: { ...chartDefaults.plugins.legend, position: 'bottom' },
+      },
+    }
+  });
+
+  // Heatmap
+  const heatmapGrid = document.getElementById('heatmapGrid');
+  const heatmapLabels = document.getElementById('heatmapLabels');
+  const hourData = new Array(24).fill(0);
+  peakHours.forEach(h => { hourData[h.hour] = h.count; });
+  const maxH = Math.max(...hourData, 1);
+
+  heatmapGrid.innerHTML = hourData.map((v, i) => {
+    const intensity = v / maxH;
+    const bg = intensity === 0
+      ? 'rgba(139, 92, 246, 0.04)'
+      : `rgba(139, 92, 246, ${0.12 + intensity * 0.65})`;
+    const shadow = intensity > 0.5 ? `box-shadow: 0 0 ${Math.round(intensity * 12)}px rgba(139, 92, 246, ${intensity * 0.4})` : '';
+    return '<div class="heatmap-cell" style="background:' + bg + ';' + shadow + '"><span class="tooltip">' + i + 'h : ' + v + ' connexions</span></div>';
+  }).join('');
+
+  heatmapLabels.innerHTML = Array.from({length: 24}, (_, i) =>
+    '<span>' + (i % 3 === 0 ? i + 'h' : '') + '</span>'
+  ).join('');
+
+  // Commands chart
+  kill('commands');
+  charts.commands = new Chart(document.getElementById('commandsChart'), {
+    type: 'bar',
+    data: {
+      labels: commands.map(c => '/' + c.command),
+      datasets: [{
+        label: 'Utilisations',
+        data: commands.map(c => c.count),
+        backgroundColor: commands.map((_, i) => C.palette[i % C.palette.length] + '60'),
+        borderColor: commands.map((_, i) => C.palette[i % C.palette.length]),
+        borderWidth: 1.5, borderRadius: 6,
+      }]
+    },
+    options: { ...chartDefaults, indexAxis: 'y', plugins: { ...chartDefaults.plugins, legend: { display: false } } },
+  });
+
+  // Session duration distribution
+  kill('sessionDist');
+  const sessionBuckets = computeSessionDistribution(players.players);
+  charts.sessionDist = new Chart(document.getElementById('sessionDistChart'), {
+    type: 'bar',
+    data: {
+      labels: sessionBuckets.labels,
+      datasets: [{
+        label: 'Joueurs',
+        data: sessionBuckets.data,
+        backgroundColor: sessionBuckets.labels.map((_, i) => {
+          const colors = [C.violet + '70', C.violet + '80', C.pink + '70', C.pink + '80', C.fuchsia + '70', C.fuchsia + '80'];
+          return colors[i % colors.length];
+        }),
+        borderRadius: 6, borderSkipped: false,
+      }]
+    },
+    options: { ...chartDefaults, plugins: { ...chartDefaults.plugins, legend: { display: false } } },
+  });
+
+  // Worlds chart
+  kill('worlds');
+  charts.worlds = new Chart(document.getElementById('worldsChart'), {
+    type: 'bar',
+    data: {
+      labels: worlds.map(w => w.world_name),
+      datasets: [{
+        label: 'Joueurs uniques',
+        data: worlds.map(w => w.unique_players),
+        backgroundColor: C.violet + '60', borderColor: C.violet, borderWidth: 1.5, borderRadius: 6,
+      }, {
+        label: 'Visites',
+        data: worlds.map(w => w.total_visits),
+        backgroundColor: C.pink + '60', borderColor: C.pink, borderWidth: 1.5, borderRadius: 6,
+      }]
+    },
+    options: chartDefaults,
+  });
+
+  // Engagement bars
+  buildEngagementBars(players.players, overview);
+}
+
+function computeSessionDistribution(players) {
+  const buckets = { '< 5m': 0, '5-15m': 0, '15-30m': 0, '30m-1h': 0, '1-3h': 0, '3h+': 0 };
+  for (const p of players) {
+    const avg = p.session_count > 0 ? p.total_playtime / p.session_count : 0;
+    if (avg < 300000) buckets['< 5m']++;
+    else if (avg < 900000) buckets['5-15m']++;
+    else if (avg < 1800000) buckets['15-30m']++;
+    else if (avg < 3600000) buckets['30m-1h']++;
+    else if (avg < 10800000) buckets['1-3h']++;
+    else buckets['3h+']++;
+  }
+  return { labels: Object.keys(buckets), data: Object.values(buckets) };
+}
+
+function buildEngagementBars(players, overview) {
+  const container = document.getElementById('engagementBars');
+  if (!players.length) { container.innerHTML = '<p style="color: var(--text-muted)">Pas de donnees</p>'; return; }
+
+  const maxPt = Math.max(...players.map(p => p.total_playtime), 1);
+  container.innerHTML = players.slice(0, 8).map(p => {
+    const pct = Math.round((p.total_playtime / maxPt) * 100);
+    return '<div class="mini-bar-row">' +
+      '<span class="mini-bar-label">' + p.username + '</span>' +
+      '<div class="mini-bar-track"><div class="mini-bar-fill" style="width:' + pct + '%"></div></div>' +
+      '<span class="mini-bar-value">' + formatDuration(p.total_playtime) + '</span>' +
+    '</div>';
+  }).join('');
+}
+
+function generateInsights(overview, retention, churn, platforms) {
+  const grid = document.getElementById('insightsGrid');
+  const insights = [];
+
+  // Retention insight
+  const recentRet = retention.filter(r => r.newPlayers > 0).slice(-7);
+  if (recentRet.length > 0) {
+    const avgRet = Math.round(recentRet.reduce((s, r) => s + r.retentionDay1, 0) / recentRet.length);
+    if (avgRet < 20) {
+      insights.push({ icon: '&#9888;', color: 'orange', title: 'Retention J+1 faible (' + avgRet + '%)', text: 'Moins de 20% des nouveaux joueurs reviennent le lendemain. Ameliorez l\'experience des premieres minutes.' });
+    } else if (avgRet >= 40) {
+      insights.push({ icon: '&#10003;', color: 'green', title: 'Bonne retention J+1 (' + avgRet + '%)', text: 'Plus de 40% des nouveaux joueurs reviennent. Votre onboarding fonctionne bien.' });
+    }
+  }
+
+  // Churn insight
+  const churned = churn.find(c => c.label.includes('Perdu'));
+  if (churned && overview.totalPlayers > 0) {
+    const churnRate = Math.round((churned.count / overview.totalPlayers) * 100);
+    if (churnRate > 60) {
+      insights.push({ icon: '&#9760;', color: 'pink', title: churnRate + '% de joueurs perdus', text: 'La majorite de vos joueurs ne reviennent plus. Envoyez des notifications ou creez des events pour les faire revenir.' });
+    }
+  }
+
+  // Platform insight
+  if (platforms.length > 0) {
+    const top = platforms[0];
+    const pct = overview.totalPlayers > 0 ? Math.round((top.count / overview.totalPlayers) * 100) : 0;
+    insights.push({ icon: '&#9743;', color: 'purple', title: top.platform + ' domine (' + pct + '%)', text: 'Adaptez votre gameplay et vos controles pour cette plateforme en priorite.' });
+  }
+
+  // Activity insight
+  if (overview.activeLast24h === 0 && overview.totalPlayers > 5) {
+    insights.push({ icon: '&#9888;', color: 'orange', title: 'Aucun joueur actif aujourd\'hui', text: 'Votre serveur n\'a eu aucune connexion dans les 24 dernieres heures.' });
+  }
+
+  if (insights.length > 0) {
+    grid.style.display = 'grid';
+    grid.innerHTML = insights.map(i =>
+      '<div class="insight-card">' +
+        '<div class="insight-icon ' + i.color + '">' + i.icon + '</div>' +
+        '<div class="insight-content"><h4>' + i.title + '</h4><p>' + i.text + '</p></div>' +
+      '</div>'
+    ).join('');
+  } else {
+    grid.style.display = 'none';
+  }
+}
+
+document.getElementById('timeRange').addEventListener('change', refreshDashboard);
+refreshDashboard();
+setInterval(refreshDashboard, 60000);
+</script>
+
+<%- include('partials/footer') %>

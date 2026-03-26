@@ -1,0 +1,28 @@
+# MCPE Analytics Plugin Configuration
+
+# URL of the analytics web panel
+panel-url: "http://localhost:3000"
+
+# API key (must match the one in the web panel)
+api-key: "mcpe-analytics-secret-key-change-me"
+
+# How often to flush buffered events (in seconds)
+flush-interval: 30
+
+# Track chat messages (can be disabled for privacy)
+track-chat: true
+
+# Track block place/break events (can generate lots of data)
+track-blocks: false
+
+# Track death events
+track-deaths: true
+
+# Track world changes
+track-worlds: true
+
+# Track commands
+track-commands: true
+
+# Debug mode (verbose logging)
+debug: false

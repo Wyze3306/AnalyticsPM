@@ -1,0 +1,265 @@
+<%- include('partials/header', { title: 'Retention' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Analyse de retention</h1>
+    <p class="subtitle">Comprenez pourquoi vos joueurs reviennent ou partent</p>
+  </div>
+  <div class="header-actions">
+    <select id="retentionDays" class="select-input">
+      <option value="7">7 jours</option>
+      <option value="14">14 jours</option>
+      <option value="30" selected>30 jours</option>
+      <option value="60">60 jours</option>
+    </select>
+  </div>
+</div>
+
+<!-- KPIs -->
+<div class="stats-grid">
+  <div class="stat-card highlight">
+    <div class="stat-icon purple">&#8634;</div>
+    <div class="stat-label">Retention J+1</div>
+    <div class="stat-value gradient" id="avgRetD1">-</div>
+    <div class="stat-sub">Reviennent le lendemain</div>
+  </div>
+  <div class="stat-card highlight-pink">
+    <div class="stat-icon pink">&#9733;</div>
+    <div class="stat-label">Retention J+7</div>
+    <div class="stat-value" id="avgRetW">-</div>
+    <div class="stat-sub">Reviennent dans la semaine</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon green">&#9824;</div>
+    <div class="stat-label">Nouveaux (periode)</div>
+    <div class="stat-value" id="totalNew">-</div>
+    <div class="stat-sub">Joueurs inscrits</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon orange">&#9888;</div>
+    <div class="stat-label">Taux de perte J+1</div>
+    <div class="stat-value" id="lossRate">-</div>
+    <div class="stat-sub">Ne reviennent jamais</div>
+  </div>
+</div>
+
+<!-- Insights -->
+<div class="insights-grid" id="retentionInsights" style="display:none"></div>
+
+<!-- Main retention chart -->
+<div class="charts-grid">
+  <div class="chart-card wide">
+    <h3><span class="chart-dot purple"></span> Taux de retention quotidien</h3>
+    <canvas id="retentionChart" height="80"></canvas>
+  </div>
+</div>
+
+<!-- New players + funnel -->
+<div class="charts-grid">
+  <div class="chart-card">
+    <h3><span class="chart-dot pink"></span> Nouveaux joueurs par jour</h3>
+    <canvas id="newPlayersChart"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3><span class="chart-dot green"></span> Entonnoir de retention</h3>
+    <canvas id="funnelChart"></canvas>
+  </div>
+</div>
+
+<!-- Retention table -->
+<div class="card">
+  <h3>Tableau de retention detaille</h3>
+  <div class="table-container">
+    <table class="data-table compact">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Nouveaux</th>
+          <th>Retour J+1</th>
+          <th>Taux J+1</th>
+          <th>Retour J+7</th>
+          <th>Taux J+7</th>
+          <th>Tendance</th>
+        </tr>
+      </thead>
+      <tbody id="retentionBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const C = {
+  violet: '#8b5cf6', pink: '#ec4899', green: '#34d399', orange: '#fbbf24', red: '#f87171',
+  gridColor: 'rgba(139, 92, 246, 0.06)', tickColor: '#7b6fa0',
+};
+let charts = {};
+function kill(n) { if (charts[n]) { charts[n].destroy(); charts[n] = null; } }
+
+async function loadRetention() {
+  const days = document.getElementById('retentionDays').value;
+  const data = await (await fetch('/api/stats/retention?days=' + days)).json();
+
+  const withData = data.filter(d => d.newPlayers > 0);
+  const avgD1 = withData.length > 0 ? Math.round(withData.reduce((s, d) => s + d.retentionDay1, 0) / withData.length) : 0;
+  const avgW = withData.length > 0 ? Math.round(withData.reduce((s, d) => s + d.retentionWeek, 0) / withData.length) : 0;
+  const totalNew = data.reduce((s, d) => s + d.newPlayers, 0);
+  const lossD1 = 100 - avgD1;
+
+  document.getElementById('avgRetD1').textContent = avgD1 + '%';
+  document.getElementById('avgRetW').textContent = avgW + '%';
+  document.getElementById('totalNew').textContent = totalNew;
+  document.getElementById('lossRate').textContent = lossD1 + '%';
+
+  // Insights
+  generateRetentionInsights(avgD1, avgW, lossD1, totalNew, data);
+
+  // Retention chart
+  kill('retention');
+  const ctx = document.getElementById('retentionChart').getContext('2d');
+  charts.retention = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: data.map(d => d.date.slice(5)),
+      datasets: [{
+        label: 'Retention J+1 (%)',
+        data: data.map(d => d.retentionDay1),
+        borderColor: C.violet, borderWidth: 2.5,
+        backgroundColor: (() => { const g = ctx.createLinearGradient(0, 0, 0, ctx.canvas.height); g.addColorStop(0, 'rgba(139,92,246,0.2)'); g.addColorStop(1, 'rgba(139,92,246,0)'); return g; })(),
+        fill: true, tension: 0.4, pointRadius: 0, pointHoverRadius: 5,
+      }, {
+        label: 'Retention J+7 (%)',
+        data: data.map(d => d.retentionWeek),
+        borderColor: C.pink, borderWidth: 2.5,
+        backgroundColor: (() => { const g = ctx.createLinearGradient(0, 0, 0, ctx.canvas.height); g.addColorStop(0, 'rgba(236,72,153,0.15)'); g.addColorStop(1, 'rgba(236,72,153,0)'); return g; })(),
+        fill: true, tension: 0.4, pointRadius: 0, pointHoverRadius: 5,
+      }]
+    },
+    options: {
+      responsive: true, interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: '#b4a9d6', font: { family: 'Inter', weight: 600, size: 11 }, usePointStyle: true } },
+        tooltip: { backgroundColor: '#1a1535', titleColor: '#f0ecff', bodyColor: '#b4a9d6', borderColor: 'rgba(139,92,246,0.3)', borderWidth: 1, cornerRadius: 10, padding: 12 } },
+      scales: {
+        x: { ticks: { color: C.tickColor }, grid: { color: C.gridColor } },
+        y: { min: 0, max: 100, ticks: { color: C.tickColor, callback: v => v + '%' }, grid: { color: C.gridColor } }
+      }
+    }
+  });
+
+  // New players chart
+  kill('newPlayers');
+  charts.newPlayers = new Chart(document.getElementById('newPlayersChart'), {
+    type: 'bar',
+    data: {
+      labels: data.map(d => d.date.slice(5)),
+      datasets: [{
+        label: 'Nouveaux joueurs',
+        data: data.map(d => d.newPlayers),
+        backgroundColor: C.violet + '50', borderColor: C.violet, borderWidth: 1.5, borderRadius: 6,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a1535', titleColor: '#f0ecff', bodyColor: '#b4a9d6', borderColor: 'rgba(139,92,246,0.3)', borderWidth: 1, cornerRadius: 10, padding: 12 } },
+      scales: { x: { ticks: { color: C.tickColor }, grid: { color: C.gridColor } }, y: { ticks: { color: C.tickColor }, grid: { color: C.gridColor } } }
+    }
+  });
+
+  // Funnel chart
+  kill('funnel');
+  const totalReturned1 = data.reduce((s, d) => s + d.returnedDay1, 0);
+  const totalReturnedW = data.reduce((s, d) => s + d.returnedWeek, 0);
+  charts.funnel = new Chart(document.getElementById('funnelChart'), {
+    type: 'bar',
+    data: {
+      labels: ['Inscrits', 'Retour J+1', 'Retour J+7'],
+      datasets: [{
+        data: [totalNew, totalReturned1, totalReturnedW],
+        backgroundColor: [C.violet + '70', C.pink + '70', C.green + '70'],
+        borderColor: [C.violet, C.pink, C.green],
+        borderWidth: 1.5, borderRadius: 8,
+      }]
+    },
+    options: {
+      responsive: true, indexAxis: 'y',
+      plugins: {
+        legend: { display: false },
+        tooltip: { backgroundColor: '#1a1535', titleColor: '#f0ecff', bodyColor: '#b4a9d6', borderColor: 'rgba(139,92,246,0.3)', borderWidth: 1, cornerRadius: 10, padding: 12,
+          callbacks: { label: item => item.raw + ' joueurs (' + (totalNew > 0 ? Math.round(item.raw / totalNew * 100) : 0) + '%)' }
+        }
+      },
+      scales: { x: { ticks: { color: C.tickColor }, grid: { color: C.gridColor } }, y: { ticks: { color: '#b4a9d6', font: { weight: 700 } }, grid: { display: false } } }
+    }
+  });
+
+  // Table
+  document.getElementById('retentionBody').innerHTML = data.map((d, i) => {
+    const d1c = d.retentionDay1 >= 30 ? 'text-success' : d.retentionDay1 >= 15 ? 'text-warning' : 'text-danger';
+    const wc = d.retentionWeek >= 40 ? 'text-success' : d.retentionWeek >= 20 ? 'text-warning' : 'text-danger';
+    // Trend compared to previous day
+    let trend = '<span class="stat-trend neutral">--</span>';
+    if (i > 0 && d.newPlayers > 0 && data[i-1].newPlayers > 0) {
+      const diff = d.retentionDay1 - data[i-1].retentionDay1;
+      if (diff > 0) trend = '<span class="stat-trend up">&#9650; +' + diff + '%</span>';
+      else if (diff < 0) trend = '<span class="stat-trend down">&#9660; ' + diff + '%</span>';
+    }
+    return '<tr>' +
+      '<td>' + d.date + '</td>' +
+      '<td>' + d.newPlayers + '</td>' +
+      '<td>' + d.returnedDay1 + '</td>' +
+      '<td class="' + d1c + '">' + d.retentionDay1 + '%</td>' +
+      '<td>' + d.returnedWeek + '</td>' +
+      '<td class="' + wc + '">' + d.retentionWeek + '%</td>' +
+      '<td>' + trend + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+function generateRetentionInsights(avgD1, avgW, lossD1, totalNew, data) {
+  const grid = document.getElementById('retentionInsights');
+  const insights = [];
+
+  if (avgD1 < 15) {
+    insights.push({ icon: '&#9888;', color: 'orange', title: 'Retention critique', text: 'Seulement ' + avgD1 + '% des joueurs reviennent J+1. L\'experience des premieres minutes doit etre amelioree : spawn, tutoriel, accueil.' });
+  } else if (avgD1 >= 35) {
+    insights.push({ icon: '&#10003;', color: 'green', title: 'Excellente retention J+1', text: avgD1 + '% de retention J+1, bien au-dessus de la moyenne. Votre onboarding fonctionne parfaitement.' });
+  }
+
+  if (avgW > 0 && avgD1 > 0) {
+    const dropoff = avgD1 - avgW;
+    if (dropoff > 20) {
+      insights.push({ icon: '&#9760;', color: 'pink', title: 'Fort decrochage entre J+1 et J+7', text: 'Vous perdez ' + dropoff + ' points entre J+1 et J+7. Les joueurs reviennent une fois mais ne restent pas. Ajoutez du contenu mid-game.' });
+    }
+  }
+
+  if (totalNew < 3 && data.length >= 7) {
+    insights.push({ icon: '&#9743;', color: 'purple', title: 'Peu de nouveaux joueurs', text: 'Seulement ' + totalNew + ' nouveaux joueurs sur la periode. Augmentez votre visibilite (serveur lists, reseaux sociaux).' });
+  }
+
+  // Check trend
+  const recent = data.slice(-7).filter(d => d.newPlayers > 0);
+  const older = data.slice(0, -7).filter(d => d.newPlayers > 0);
+  if (recent.length >= 3 && older.length >= 3) {
+    const recentAvg = recent.reduce((s, d) => s + d.retentionDay1, 0) / recent.length;
+    const olderAvg = older.reduce((s, d) => s + d.retentionDay1, 0) / older.length;
+    if (recentAvg > olderAvg + 5) {
+      insights.push({ icon: '&#9650;', color: 'green', title: 'Retention en hausse', text: 'La retention J+1 recente (' + Math.round(recentAvg) + '%) est en hausse par rapport a avant (' + Math.round(olderAvg) + '%). Continuez comme ca !' });
+    } else if (recentAvg < olderAvg - 5) {
+      insights.push({ icon: '&#9660;', color: 'orange', title: 'Retention en baisse', text: 'La retention J+1 recente (' + Math.round(recentAvg) + '%) est en baisse par rapport a avant (' + Math.round(olderAvg) + '%). Investigez les changements recents.' });
+    }
+  }
+
+  if (insights.length > 0) {
+    grid.style.display = 'grid';
+    grid.innerHTML = insights.map(i =>
+      '<div class="insight-card"><div class="insight-icon ' + i.color + '">' + i.icon + '</div><div class="insight-content"><h4>' + i.title + '</h4><p>' + i.text + '</p></div></div>'
+    ).join('');
+  } else {
+    grid.style.display = 'none';
+  }
+}
+
+document.getElementById('retentionDays').addEventListener('change', loadRetention);
+loadRetention();
+</script>
+
+<%- include('partials/footer') %>

@@ -1,0 +1,15 @@
+name: MCPEAnalytics
+version: 1.0.0
+api: 5.0.0
+main: mcpe\analytics\Main
+author: Analytics
+description: Player analytics tracking plugin - sends data to the web analytics panel
+commands:
+  analytics:
+    description: Analytics plugin commands
+    usage: /analytics <status|flush|stats>
+    permission: analytics.admin
+permissions:
+  analytics.admin:
+    description: Access analytics admin commands
+    default: op

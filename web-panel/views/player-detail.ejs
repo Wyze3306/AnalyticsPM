@@ -1,0 +1,295 @@
+<%- include('partials/header', { title: 'Detail joueur' }) %>
+
+<div class="page-header">
+  <div style="display:flex;align-items:center;gap:16px">
+    <a href="/players" class="btn btn-sm btn-ghost">&#8592; Retour</a>
+    <div>
+      <h1 id="playerName">Chargement...</h1>
+      <p class="subtitle" id="playerSub"></p>
+    </div>
+  </div>
+</div>
+
+<!-- Player KPIs -->
+<div class="stats-grid">
+  <div class="stat-card highlight">
+    <div class="stat-icon purple">&#9203;</div>
+    <div class="stat-label">Temps de jeu total</div>
+    <div class="stat-value gradient" id="pPlaytime">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon blue">&#9733;</div>
+    <div class="stat-label">Sessions</div>
+    <div class="stat-value" id="pSessions">-</div>
+    <div class="stat-sub" id="pAvgSession">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon pink">&#9743;</div>
+    <div class="stat-label">Plateforme</div>
+    <div class="stat-value small" id="pPlatform">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon green">&#9654;</div>
+    <div class="stat-label">Premiere connexion</div>
+    <div class="stat-value small" id="pFirstSeen">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon orange">&#9200;</div>
+    <div class="stat-label">Derniere connexion</div>
+    <div class="stat-value small" id="pLastSeen">-</div>
+    <div class="stat-sub" id="pLastSeenRel">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon red">&#9760;</div>
+    <div class="stat-label">Morts</div>
+    <div class="stat-value" id="pDeaths">-</div>
+  </div>
+</div>
+
+<!-- Insights about this player -->
+<div class="insights-grid" id="playerInsights" style="display:none"></div>
+
+<!-- Charts -->
+<div class="charts-grid">
+  <div class="chart-card">
+    <h3><span class="chart-dot purple"></span> Commandes les plus utilisees</h3>
+    <canvas id="playerCmdChart"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3><span class="chart-dot pink"></span> Temps par monde</h3>
+    <canvas id="playerWorldChart"></canvas>
+  </div>
+</div>
+
+<div class="charts-grid">
+  <div class="chart-card wide">
+    <h3><span class="chart-dot green"></span> Historique des sessions</h3>
+    <canvas id="sessionHistoryChart" height="70"></canvas>
+  </div>
+</div>
+
+<!-- Sessions timeline -->
+<div class="card">
+  <h3>Dernieres sessions</h3>
+  <div class="timeline" id="sessionsTimeline"></div>
+</div>
+
+<!-- Commands + Messages side by side -->
+<div class="charts-grid">
+  <div class="card" style="grid-column:span 1">
+    <h3>Dernieres commandes</h3>
+    <div class="table-container">
+      <table class="data-table compact">
+        <thead><tr><th>Commande</th><th>Arguments</th><th>Monde</th><th>Date</th></tr></thead>
+        <tbody id="commandsBody"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card" style="grid-column:span 1">
+    <h3>Derniers messages</h3>
+    <div class="table-container">
+      <table class="data-table compact">
+        <thead><tr><th>Message</th><th>Monde</th><th>Date</th></tr></thead>
+        <tbody id="messagesBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Deaths -->
+<div class="card" id="deathsCard" style="display:none">
+  <h3>Dernieres morts</h3>
+  <div class="table-container">
+    <table class="data-table compact">
+      <thead><tr><th>Cause</th><th>Monde</th><th>Position</th><th>Date</th></tr></thead>
+      <tbody id="deathsBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const uuid = '<%= uuid %>';
+const C = {
+  palette: ['#8b5cf6', '#ec4899', '#d946ef', '#60a5fa', '#34d399', '#fbbf24', '#f87171', '#a78bfa'],
+  violet: '#8b5cf6', pink: '#ec4899', green: '#34d399',
+  gridColor: 'rgba(139, 92, 246, 0.06)',
+  tickColor: '#7b6fa0',
+};
+
+function formatDuration(ms) {
+  if (!ms) return '0m';
+  const d = Math.floor(ms / 86400000), h = Math.floor((ms % 86400000) / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  if (d > 0) return d + 'j ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+
+function formatDate(ts) {
+  if (!ts) return '-';
+  return new Date(ts).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function relativeTime(ts) {
+  const diff = Date.now() - ts;
+  const m = Math.floor(diff / 60000), h = Math.floor(diff / 3600000), d = Math.floor(diff / 86400000);
+  if (m < 5) return 'A l\'instant';
+  if (m < 60) return 'Il y a ' + m + 'm';
+  if (h < 24) return 'Il y a ' + h + 'h';
+  return 'Il y a ' + d + 'j';
+}
+
+async function loadPlayer() {
+  const res = await fetch('/api/players/' + uuid);
+  if (!res.ok) { document.getElementById('playerName').textContent = 'Joueur introuvable'; return; }
+  const data = await res.json();
+  const p = data.player;
+
+  document.getElementById('playerName').textContent = p.username;
+  document.getElementById('playerSub').textContent = p.platform + ' | UUID: ' + p.uuid;
+  document.getElementById('pPlaytime').textContent = formatDuration(p.total_playtime);
+  document.getElementById('pSessions').textContent = p.session_count;
+  document.getElementById('pAvgSession').textContent = 'Moy: ' + formatDuration(p.session_count > 0 ? Math.round(p.total_playtime / p.session_count) : 0) + ' / session';
+  document.getElementById('pPlatform').textContent = p.platform;
+  document.getElementById('pFirstSeen').textContent = formatDate(p.first_seen);
+  document.getElementById('pLastSeen').textContent = formatDate(p.last_seen);
+  document.getElementById('pLastSeenRel').textContent = relativeTime(p.last_seen);
+  document.getElementById('pDeaths').textContent = data.deaths.length;
+
+  // Player insights
+  generatePlayerInsights(p, data);
+
+  // Command chart
+  if (data.commandStats.length > 0) {
+    new Chart(document.getElementById('playerCmdChart'), {
+      type: 'bar',
+      data: {
+        labels: data.commandStats.map(c => '/' + c.command),
+        datasets: [{
+          label: 'Utilisations',
+          data: data.commandStats.map(c => c.count),
+          backgroundColor: data.commandStats.map((_, i) => C.palette[i % C.palette.length] + '60'),
+          borderColor: data.commandStats.map((_, i) => C.palette[i % C.palette.length]),
+          borderWidth: 1.5, borderRadius: 6,
+        }]
+      },
+      options: {
+        indexAxis: 'y', responsive: true,
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a1535', titleColor: '#f0ecff', bodyColor: '#b4a9d6', borderColor: 'rgba(139,92,246,0.3)', borderWidth: 1, cornerRadius: 10, padding: 12 } },
+        scales: { x: { ticks: { color: C.tickColor }, grid: { color: C.gridColor } }, y: { ticks: { color: '#b4a9d6', font: { weight: 600 } }, grid: { color: C.gridColor } } }
+      }
+    });
+  }
+
+  // World chart
+  if (data.worldStats.length > 0) {
+    new Chart(document.getElementById('playerWorldChart'), {
+      type: 'doughnut',
+      data: {
+        labels: data.worldStats.map(w => w.world_name + ' (' + formatDuration(w.total_time) + ')'),
+        datasets: [{ data: data.worldStats.map(w => w.total_time || 1), backgroundColor: C.palette, borderColor: '#1a1535', borderWidth: 3 }]
+      },
+      options: { responsive: true, cutout: '60%', plugins: { legend: { position: 'bottom', labels: { color: '#b4a9d6', font: { family: 'Inter', weight: 600, size: 11 }, padding: 14, usePointStyle: true } } } }
+    });
+  }
+
+  // Session history chart
+  if (data.sessions.length > 0) {
+    const sessionsReversed = [...data.sessions].reverse();
+    const ctx = document.getElementById('sessionHistoryChart').getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, ctx.canvas.height);
+    gradient.addColorStop(0, 'rgba(139, 92, 246, 0.25)');
+    gradient.addColorStop(1, 'rgba(139, 92, 246, 0)');
+
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: sessionsReversed.map(s => formatDate(s.join_time).split(' ')[0]),
+        datasets: [{
+          label: 'Duree (min)',
+          data: sessionsReversed.map(s => Math.round((s.duration || 0) / 60000)),
+          backgroundColor: sessionsReversed.map(s => {
+            const dur = s.duration || 0;
+            if (dur > 3600000) return C.violet + '80';
+            if (dur > 1800000) return C.pink + '60';
+            return 'rgba(139,92,246,0.3)';
+          }),
+          borderRadius: 4,
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a1535', titleColor: '#f0ecff', bodyColor: '#b4a9d6', borderColor: 'rgba(139,92,246,0.3)', borderWidth: 1, cornerRadius: 10, padding: 12, callbacks: { label: item => formatDuration(sessionsReversed[item.dataIndex].duration) } } },
+        scales: { x: { ticks: { color: C.tickColor, maxRotation: 45 }, grid: { color: C.gridColor } }, y: { ticks: { color: C.tickColor, callback: v => v + 'm' }, grid: { color: C.gridColor } } }
+      }
+    });
+  }
+
+  // Sessions timeline
+  document.getElementById('sessionsTimeline').innerHTML = data.sessions.slice(0, 15).map(s =>
+    '<div class="timeline-item">' +
+      '<div class="timeline-dot"></div>' +
+      '<div class="timeline-content">' +
+        '<span class="timeline-date">' + formatDate(s.join_time) + '</span>' +
+        '<span class="timeline-detail">Duree: <strong style="color:var(--violet-light)">' + formatDuration(s.duration) + '</strong> | ' + (s.platform || 'N/A') + '</span>' +
+      '</div>' +
+    '</div>'
+  ).join('') || '<p style="color:var(--text-muted);padding:16px">Aucune session</p>';
+
+  // Commands table
+  document.getElementById('commandsBody').innerHTML = data.commands.slice(0, 25).map(c =>
+    '<tr><td><span class="text-purple">/' + c.command + '</span></td><td>' + (c.arguments || '-') + '</td><td>' + (c.world || '-') + '</td><td>' + formatDate(c.timestamp) + '</td></tr>'
+  ).join('') || '<tr><td colspan="4" class="empty">Aucune commande</td></tr>';
+
+  // Messages table
+  document.getElementById('messagesBody').innerHTML = data.messages.slice(0, 25).map(m =>
+    '<tr><td>' + m.message + '</td><td>' + (m.world || '-') + '</td><td>' + formatDate(m.timestamp) + '</td></tr>'
+  ).join('') || '<tr><td colspan="3" class="empty">Aucun message</td></tr>';
+
+  // Deaths table
+  if (data.deaths.length > 0) {
+    document.getElementById('deathsCard').style.display = 'block';
+    document.getElementById('deathsBody').innerHTML = data.deaths.slice(0, 20).map(d =>
+      '<tr><td><span class="text-danger">' + d.cause + '</span></td><td>' + (d.world || '-') + '</td><td>' + Math.round(d.x) + ', ' + Math.round(d.y) + ', ' + Math.round(d.z) + '</td><td>' + formatDate(d.timestamp) + '</td></tr>'
+    ).join('');
+  }
+}
+
+function generatePlayerInsights(player, data) {
+  const grid = document.getElementById('playerInsights');
+  const insights = [];
+  const daysSinceLastSeen = (Date.now() - player.last_seen) / 86400000;
+  const avgSession = player.session_count > 0 ? player.total_playtime / player.session_count : 0;
+
+  if (daysSinceLastSeen > 14) {
+    insights.push({ icon: '&#9888;', color: 'orange', title: 'Joueur a risque de churn', text: 'Ce joueur ne s\'est pas connecte depuis ' + Math.floor(daysSinceLastSeen) + ' jours. Considerez un message de bienvenue retour.' });
+  } else if (daysSinceLastSeen < 1 && player.session_count > 5) {
+    insights.push({ icon: '&#9829;', color: 'pink', title: 'Joueur fidele et actif', text: 'Ce joueur est regulierement connecte avec ' + player.session_count + ' sessions. C\'est un joueur cle a retenir.' });
+  }
+
+  if (avgSession > 3600000) {
+    insights.push({ icon: '&#9733;', color: 'purple', title: 'Longues sessions (' + formatDuration(avgSession) + ' en moy.)', text: 'Ce joueur passe beaucoup de temps en jeu. Il est probablement tres engage avec votre contenu.' });
+  } else if (avgSession < 300000 && player.session_count > 3) {
+    insights.push({ icon: '&#9888;', color: 'orange', title: 'Sessions tres courtes (' + formatDuration(avgSession) + ' en moy.)', text: 'Ce joueur se deconnecte rapidement. Verifiez s\'il rencontre des problemes ou manque de contenu.' });
+  }
+
+  if (data.deaths.length > 10 && data.sessions.length > 0) {
+    const deathsPerSession = (data.deaths.length / data.sessions.length).toFixed(1);
+    insights.push({ icon: '&#9760;', color: 'pink', title: deathsPerSession + ' morts par session', text: 'Taux de mort eleve. Cela pourrait frustrer le joueur et contribuer au churn.' });
+  }
+
+  if (data.worldStats.length > 3) {
+    insights.push({ icon: '&#9789;', color: 'green', title: 'Explorateur (' + data.worldStats.length + ' mondes visites)', text: 'Ce joueur explore beaucoup de mondes differents. C\'est un bon signe d\'engagement.' });
+  }
+
+  if (insights.length > 0) {
+    grid.style.display = 'grid';
+    grid.innerHTML = insights.map(i =>
+      '<div class="insight-card"><div class="insight-icon ' + i.color + '">' + i.icon + '</div><div class="insight-content"><h4>' + i.title + '</h4><p>' + i.text + '</p></div></div>'
+    ).join('');
+  }
+}
+
+loadPlayer();
+</script>
+
+<%- include('partials/footer') %>
