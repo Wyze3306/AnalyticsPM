@@ -7,6 +7,7 @@ const initSqlJs = require("sql.js");
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY || "mcpe-analytics-secret-key-change-me";
+const PANEL_PASSWORD = process.env.PANEL_PASSWORD || "admin";
 const DB_PATH = path.join(__dirname, "data", "analytics.db");
 
 let db;
@@ -182,18 +183,76 @@ async function main() {
   // Middleware
   app.use(cors());
   app.use(express.json({ limit: "10mb" }));
+  app.use(express.urlencoded({ extended: true }));
   app.use(express.static(path.join(__dirname, "public")));
   app.set("view engine", "ejs");
   app.set("views", path.join(__dirname, "views"));
 
-  // API key authentication
+  // Simple cookie-based session tokens
+  const activeSessions = new Set();
+  function generateToken() {
+    return require("crypto").randomBytes(32).toString("hex");
+  }
+
+  function parseCookies(req) {
+    const cookies = {};
+    (req.headers.cookie || "").split(";").forEach(c => {
+      const [k, v] = c.trim().split("=");
+      if (k && v) cookies[k] = v;
+    });
+    return cookies;
+  }
+
+  // Panel authentication middleware (for browser pages + dashboard API)
+  function panelAuth(req, res, next) {
+    const cookies = parseCookies(req);
+    if (cookies.session && activeSessions.has(cookies.session)) return next();
+    // Redirect to login page
+    if (req.path === "/login") return next();
+    res.redirect("/login");
+  }
+
+  // API key authentication (for plugin ingest endpoints)
   function apiAuth(req, res, next) {
     const key = req.headers["x-api-key"];
     if (key !== API_KEY) return res.status(401).json({ error: "Invalid API key" });
     next();
   }
 
-  // ===================== INGEST API =====================
+  // Login page
+  app.get("/login", (req, res) => {
+    const cookies = parseCookies(req);
+    if (cookies.session && activeSessions.has(cookies.session)) return res.redirect("/");
+    res.render("login", { error: null });
+  });
+
+  app.post("/login", (req, res) => {
+    if (req.body.password === PANEL_PASSWORD) {
+      const token = generateToken();
+      activeSessions.add(token);
+      res.setHeader("Set-Cookie", `session=${token}; HttpOnly; Path=/; Max-Age=604800; SameSite=Strict`);
+      return res.redirect("/");
+    }
+    res.render("login", { error: "Mot de passe incorrect" });
+  });
+
+  app.get("/logout", (req, res) => {
+    const cookies = parseCookies(req);
+    if (cookies.session) activeSessions.delete(cookies.session);
+    res.setHeader("Set-Cookie", "session=; HttpOnly; Path=/; Max-Age=0");
+    res.redirect("/login");
+  });
+
+  // Dashboard API auth: accept session cookie OR api key
+  function dashAuth(req, res, next) {
+    const cookies = parseCookies(req);
+    if (cookies.session && activeSessions.has(cookies.session)) return next();
+    const key = req.headers["x-api-key"];
+    if (key === API_KEY) return next();
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  // ===================== INGEST API (no panel auth, uses API key) =====================
 
   app.post("/api/ingest/join", apiAuth, (req, res) => {
     const { uuid, username, platform, timestamp, ip } = req.body;
@@ -313,10 +372,10 @@ async function main() {
     res.json({ success: true, count: entries.length });
   });
 
-  // ===================== LOGS API =====================
+  // ===================== LOGS API (protected) =====================
 
   // Search logs with filters
-  app.get("/api/logs", (req, res) => {
+  app.get("/api/logs", dashAuth, (req, res) => {
     const { player, category, action, item, target, world, level, search, from, to, limit = 100, offset = 0 } = req.query;
     let where = [];
     let params = [];
@@ -340,12 +399,12 @@ async function main() {
   });
 
   // Get all categories
-  app.get("/api/logs/categories", (req, res) => {
+  app.get("/api/logs/categories", dashAuth, (req, res) => {
     res.json(getAll("SELECT category, COUNT(*) as count FROM logs GROUP BY category ORDER BY count DESC"));
   });
 
   // Get all actions for a category
-  app.get("/api/logs/actions", (req, res) => {
+  app.get("/api/logs/actions", dashAuth, (req, res) => {
     const { category } = req.query;
     let q = "SELECT action, COUNT(*) as count FROM logs";
     const p = [];
@@ -355,7 +414,7 @@ async function main() {
   });
 
   // Item trace: follow an item across all events
-  app.get("/api/logs/trace/item", (req, res) => {
+  app.get("/api/logs/trace/item", dashAuth, (req, res) => {
     const { item, from, to, limit = 200 } = req.query;
     if (!item) return res.status(400).json({ error: "item parameter required" });
     let where = "WHERE item_name LIKE ?";
@@ -367,7 +426,7 @@ async function main() {
   });
 
   // Player timeline: every single log for a player, chronological
-  app.get("/api/logs/trace/player", (req, res) => {
+  app.get("/api/logs/trace/player", dashAuth, (req, res) => {
     const { player, from, to, limit = 300 } = req.query;
     if (!player) return res.status(400).json({ error: "player parameter required" });
     let where = "WHERE (player_name LIKE ? OR target_player LIKE ?)";
@@ -379,7 +438,7 @@ async function main() {
   });
 
   // Logs stats overview
-  app.get("/api/logs/stats", (req, res) => {
+  app.get("/api/logs/stats", dashAuth, (req, res) => {
     const now = Date.now();
     const day = 86400000;
     res.json({
@@ -396,7 +455,7 @@ async function main() {
 
   // ===================== DASHBOARD API =====================
 
-  app.get("/api/stats/overview", (req, res) => {
+  app.get("/api/stats/overview", dashAuth, (req, res) => {
     const now = Date.now();
     const day = 86400000;
     const week = 7 * day;
@@ -415,7 +474,7 @@ async function main() {
     });
   });
 
-  app.get("/api/players", (req, res) => {
+  app.get("/api/players", dashAuth, (req, res) => {
     const { sort = "last_seen", order = "DESC", limit = 50, offset = 0, search } = req.query;
     const allowedSorts = ["last_seen", "first_seen", "total_playtime", "session_count", "username"];
     const sortCol = allowedSorts.includes(sort) ? sort : "last_seen";
@@ -434,7 +493,7 @@ async function main() {
     res.json({ players, total });
   });
 
-  app.get("/api/players/:uuid", (req, res) => {
+  app.get("/api/players/:uuid", dashAuth, (req, res) => {
     const uuid = req.params.uuid;
     const player = getOne("SELECT * FROM players WHERE uuid = ?", [uuid]);
     if (!player) return res.status(404).json({ error: "Player not found" });
@@ -451,7 +510,7 @@ async function main() {
     });
   });
 
-  app.get("/api/stats/retention", (req, res) => {
+  app.get("/api/stats/retention", dashAuth, (req, res) => {
     const days = Number(req.query.days) || 30;
     const now = Date.now();
     const day = 86400000;
@@ -486,7 +545,7 @@ async function main() {
     res.json(retention.reverse());
   });
 
-  app.get("/api/stats/activity", (req, res) => {
+  app.get("/api/stats/activity", dashAuth, (req, res) => {
     const days = Number(req.query.days) || 7;
     const since = Date.now() - days * 86400000;
     const sessions = getAll("SELECT join_time, leave_time, duration FROM sessions WHERE join_time > ? ORDER BY join_time", [since]);
@@ -505,16 +564,16 @@ async function main() {
     })));
   });
 
-  app.get("/api/stats/platforms", (req, res) => {
+  app.get("/api/stats/platforms", dashAuth, (req, res) => {
     res.json(getAll("SELECT platform, COUNT(*) as count FROM players GROUP BY platform ORDER BY count DESC"));
   });
 
-  app.get("/api/stats/commands", (req, res) => {
+  app.get("/api/stats/commands", dashAuth, (req, res) => {
     const limit = Number(req.query.limit) || 20;
     res.json(getAll("SELECT command, COUNT(*) as count FROM commands GROUP BY command ORDER BY count DESC LIMIT ?", [limit]));
   });
 
-  app.get("/api/stats/worlds", (req, res) => {
+  app.get("/api/stats/worlds", dashAuth, (req, res) => {
     res.json(getAll(`
       SELECT world_name, COUNT(DISTINCT player_uuid) as unique_players,
       COUNT(*) as total_visits, SUM(duration) as total_time
@@ -522,11 +581,11 @@ async function main() {
     `));
   });
 
-  app.get("/api/stats/peak-hours", (req, res) => {
+  app.get("/api/stats/peak-hours", dashAuth, (req, res) => {
     res.json(getAll("SELECT (join_time / 3600000 % 24) as hour, COUNT(*) as count FROM sessions GROUP BY hour ORDER BY hour"));
   });
 
-  app.get("/api/stats/churn", (req, res) => {
+  app.get("/api/stats/churn", dashAuth, (req, res) => {
     const now = Date.now();
     const day = 86400000;
     const brackets = [
@@ -545,7 +604,7 @@ async function main() {
     })));
   });
 
-  app.get("/api/stats/daily-players", (req, res) => {
+  app.get("/api/stats/daily-players", dashAuth, (req, res) => {
     const days = Number(req.query.days) || 30;
     const now = Date.now();
     const day = 86400000;
@@ -563,14 +622,14 @@ async function main() {
     res.json(result);
   });
 
-  // ===================== PAGES =====================
+  // ===================== PAGES (protected) =====================
 
-  app.get("/", (req, res) => res.render("dashboard"));
-  app.get("/players", (req, res) => res.render("players"));
-  app.get("/player/:uuid", (req, res) => res.render("player-detail", { uuid: req.params.uuid }));
-  app.get("/retention", (req, res) => res.render("retention"));
-  app.get("/worlds", (req, res) => res.render("worlds"));
-  app.get("/logs", (req, res) => res.render("logs"));
+  app.get("/", panelAuth, (req, res) => res.render("dashboard"));
+  app.get("/players", panelAuth, (req, res) => res.render("players"));
+  app.get("/player/:uuid", panelAuth, (req, res) => res.render("player-detail", { uuid: req.params.uuid }));
+  app.get("/retention", panelAuth, (req, res) => res.render("retention"));
+  app.get("/worlds", panelAuth, (req, res) => res.render("worlds"));
+  app.get("/logs", panelAuth, (req, res) => res.render("logs"));
 
   // Save DB on shutdown
   process.on("SIGINT", () => { saveDbNow(); process.exit(0); });
